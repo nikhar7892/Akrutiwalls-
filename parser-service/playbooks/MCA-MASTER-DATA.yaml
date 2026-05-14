@@ -1,0 +1,124 @@
+# MCA21 "View Company/LLP Master Data" page — the public snapshot a CA pulls
+# from mca.gov.in to verify identity, status, capital, AGM dates, and the
+# current directors of any company. Single most data-rich master document.
+form: MCA-MASTER-DATA
+description: MCA21 Master Data screenshot / PDF for the company
+
+match:
+  text_contains_any:
+    - "Company/LLP Master Data"
+    - "Master Data"
+    - "View Company"
+    - "MCA21"
+  text_contains:
+    - "CIN"
+
+regex:
+  # Identity
+  - field: company.cin
+    pattern: '\b([UL]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})\b'
+    transform: upper
+    confidence: 0.98
+  - field: company.name
+    pattern: 'Company\s+Name[\s:\-]+([A-Z][A-Z0-9 .,&\-]+(?:PRIVATE\s+LIMITED|LIMITED|LLP))'
+    confidence: 0.95
+  - field: company.rocCode
+    pattern: 'RoC[\s\-]?Code[\s:\-]+([A-Za-z\-\s]+?)(?:\n|Registration)'
+    confidence: 0.9
+  - field: company.registrationNo
+    pattern: 'Registration\s+Number[\s:\-]+(\d+)'
+    confidence: 0.95
+  - field: company.companyClass
+    pattern: '(?:Class of Company)[\s:\-]+(Private|Public|OPC|One\s+Person)'
+    transform: upper
+    confidence: 0.95
+  - field: company.status
+    pattern: '(?:Company )?Status[\s:\-]+(Active|Dormant|Strike[\s\-]?Off|Under\s+Liquidation|Dissolved|Amalgamated)'
+    transform: upper
+    confidence: 0.95
+  - field: company.listingStatus
+    pattern: 'Whether\s+Listed[^:]*[\s:\-]+(Listed|Unlisted)'
+    transform: upper
+    confidence: 0.95
+  - field: company.dateOfIncorporation
+    pattern: 'Date\s+of\s+Incorporation[\s:\-]+(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.95
+  - field: company.emailOfficial
+    pattern: 'Email\s+(?:Id|ID|Address)[\s:\-]+([\w\.\-+]+@[\w\.\-]+\.[A-Za-z]{2,})'
+    confidence: 0.95
+
+  # Capital
+  - field: capital.authorizedAmount
+    pattern: 'Authori[sz]ed\s+Capital[^:]*[\s:\-]+(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d{1,2})?)'
+    transform: number
+    confidence: 0.95
+  - field: capital.paidUpAmount
+    pattern: 'Paid[\s\-]?up\s+Capital[^:]*[\s:\-]+(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d{1,2})?)'
+    transform: number
+    confidence: 0.95
+
+  # Address (registered office) — captured as one line; user splits in review
+  - field: address.line1
+    pattern: 'Address\s+of\s+Registered\s+Office[\s:\-]+(.+?)(?:\n|Email|Whether)'
+    confidence: 0.85
+
+  # Last AGM and balance sheet — useful for AOC-4 / MGT-7 due-date reasoning
+  - field: company.lastAgmDate
+    pattern: 'Date\s+of\s+Last\s+AGM[\s:\-]+(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.95
+  - field: company.lastBalanceSheetDate
+    pattern: 'Date\s+of\s+Balance\s+Sheet[\s:\-]+(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.95
+
+# Directors / Signatory Details table.
+tables:
+  - target: directors
+    min_data_rows: 1
+    require: [din, name]
+    columns:
+      - field: din
+        matches: "din|pan"
+        confidence: 0.95
+      - field: name
+        matches: "name"
+        confidence: 0.95
+      - field: designation
+        matches: "designation|role"
+        confidence: 0.9
+      - field: appointmentDate
+        matches: "begin\\s*date|date\\s+of\\s+appointment|appointment"
+        transform: date
+        confidence: 0.9
+      - field: cessationDate
+        matches: "end\\s*date|cessation|resignation"
+        transform: date
+        confidence: 0.85
+
+defaults:
+  capital.changeReason: "INITIAL"
+  address.type: "REGISTERED"
+  address.country: "India"
+
+writes_to:
+  - entity: Company
+    fields: [cin, name, rocCode, registrationNo, companyClass, status, listingStatus, dateOfIncorporation, emailOfficial]
+    requires: [cin]
+    transforms:
+      dateOfIncorporation: date
+  - entity: Address
+    fields: [type, line1, country]
+    requires: [line1]
+  - entity: CapitalHistory
+    fields: [authorizedAmount, paidUpAmount, changeReason, effectiveFrom]
+    requires: [authorizedAmount]
+  - entity: Directors
+    list: true
+    target: directors
+    fields: [din, name, designation, appointmentDate, cessationDate]
+    requires: [din, name]
+    transforms:
+      appointmentDate: date
+      cessationDate: date

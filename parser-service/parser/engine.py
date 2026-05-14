@@ -36,6 +36,7 @@ class Playbook:
     match: dict = field(default_factory=dict)
     acroform: dict[str, str] = field(default_factory=dict)
     regex: list[dict] = field(default_factory=list)
+    tables: list[dict] = field(default_factory=list)
     defaults: dict[str, Any] = field(default_factory=dict)
     writes_to: list[dict] = field(default_factory=list)
     llm_hints: dict[str, Any] = field(default_factory=dict)
@@ -112,7 +113,14 @@ class PlaybookEngine:
                 continue
             self._set(extract, target, value, source="regex", confidence=rule.get("confidence", 0.9))
 
-        # 3. Defaults — fill anything still empty
+        # 3. Tables — extract repeating rows (e.g. MOA subscribers) into list entities
+        for table_rule in p.tables:
+            rows = self._extract_table_rows(bundle.tables, table_rule)
+            if rows:
+                target = str(table_rule.get("target", "rows"))
+                extract[target] = rows  # list of {field: slot} records
+
+        # 4. Defaults — fill anything still empty
         for target, value in p.defaults.items():
             if self._has(extract, target):
                 continue
@@ -120,9 +128,12 @@ class PlaybookEngine:
 
         # 4. Final transform pass for AcroForm values (regex already transformed inline)
         for entity, fields_ in extract.items():
+            if not isinstance(fields_, dict):
+                continue  # list entities (subscribers, directors) skip this pass
             for field_name, slot in fields_.items():
-                if slot["source"] == "acroform":
-                    # Allow per-target transforms via writes_to.transforms if present.
+                if not isinstance(slot, dict):
+                    continue
+                if slot.get("source") == "acroform":
                     transform_name = self._writes_to_transform(p, entity, field_name)
                     if transform_name:
                         slot["value"] = apply_transform(transform_name, slot["value"])
@@ -144,6 +155,13 @@ class PlaybookEngine:
                 for slot in v.values():
                     if isinstance(slot, dict) and "confidence" in slot:
                         scores.append(float(slot["confidence"]))
+            elif isinstance(v, list):
+                for row in v:
+                    if not isinstance(row, dict):
+                        continue
+                    for slot in row.values():
+                        if isinstance(slot, dict) and "confidence" in slot:
+                            scores.append(float(slot["confidence"]))
         if not scores:
             return "none"
         avg = sum(scores) / len(scores)
@@ -173,6 +191,7 @@ class PlaybookEngine:
                     match=data.get("match", {}),
                     acroform={str(k): str(v) for k, v in (data.get("acroform") or {}).items()},
                     regex=list(data.get("regex") or []),
+                    tables=list(data.get("tables") or []),
                     defaults=dict(data.get("defaults") or {}),
                     writes_to=list(data.get("writes_to") or []),
                     llm_hints=dict(data.get("llm") or {}),
@@ -238,3 +257,107 @@ class PlaybookEngine:
                 transforms = w.get("transforms") or {}
                 return transforms.get(field_name)
         return None
+
+    # ---------- table extraction ----------
+
+    def _extract_table_rows(
+        self,
+        tables: list[list[list[Optional[str]]]],
+        rule: dict,
+    ) -> list[dict[str, dict]]:
+        """Find the first table that matches `rule`, map columns by header, return rows."""
+        columns_spec = rule.get("columns") or []
+        if not columns_spec:
+            return []
+        min_data_rows = int(rule.get("min_data_rows", 1))
+        require = list(rule.get("require") or [])
+
+        for table in tables:
+            if not table or len(table) < 1 + min_data_rows:
+                continue
+            mapping = self._match_table_header(table, columns_spec)
+            if not mapping:
+                continue
+            # `mapping` is {field_name: column_index}. Skip the header row and iterate data rows.
+            rows: list[dict[str, dict]] = []
+            header_row_idx = self._find_header_row(table, columns_spec)
+            for raw_row in table[header_row_idx + 1 :]:
+                if not raw_row:
+                    continue
+                record: dict[str, dict] = {}
+                for field_name, col_idx in mapping.items():
+                    if col_idx >= len(raw_row):
+                        continue
+                    cell = raw_row[col_idx]
+                    if cell is None:
+                        continue
+                    value = str(cell).strip()
+                    if not value:
+                        continue
+                    spec = next((c for c in columns_spec if c.get("field") == field_name), {})
+                    transformed = apply_transform(spec.get("transform"), value)
+                    if transformed in (None, ""):
+                        continue
+                    record[field_name] = {
+                        "value": transformed,
+                        "source": "table",
+                        "confidence": float(spec.get("confidence", 0.85)),
+                    }
+                # Drop rows that don't satisfy required fields.
+                if require and not all(record.get(r) for r in require):
+                    continue
+                if record:
+                    rows.append(record)
+            if len(rows) >= min_data_rows:
+                return rows
+        return []
+
+    def _find_header_row(
+        self,
+        table: list[list[Optional[str]]],
+        columns_spec: list[dict],
+    ) -> int:
+        """Header is the first row where any cell matches any column's `matches` regex."""
+        for idx, row in enumerate(table):
+            if self._row_matches_header(row, columns_spec):
+                return idx
+        return 0
+
+    def _row_matches_header(
+        self,
+        row: list[Optional[str]],
+        columns_spec: list[dict],
+    ) -> bool:
+        joined = " ".join((c or "").lower() for c in row)
+        if not joined.strip():
+            return False
+        for spec in columns_spec:
+            pattern = spec.get("matches")
+            if pattern and re.search(pattern, joined, flags=re.IGNORECASE):
+                return True
+        return False
+
+    def _match_table_header(
+        self,
+        table: list[list[Optional[str]]],
+        columns_spec: list[dict],
+    ) -> dict[str, int]:
+        """Return {field_name: column_index} for columns identifiable in the header row."""
+        header_idx = self._find_header_row(table, columns_spec)
+        if header_idx >= len(table):
+            return {}
+        header = [(c or "").strip().lower() for c in table[header_idx]]
+        if not any(header):
+            return {}
+        mapping: dict[str, int] = {}
+        for spec in columns_spec:
+            pattern = spec.get("matches")
+            field_name = spec.get("field")
+            if not pattern or not field_name:
+                continue
+            for col_idx, cell in enumerate(header):
+                if cell and re.search(pattern, cell, flags=re.IGNORECASE):
+                    mapping[field_name] = col_idx
+                    break
+        # Require at least two columns matched, else this isn't the table.
+        return mapping if len(mapping) >= 2 else {}

@@ -7,8 +7,10 @@ import {
   applyParsedCapital,
   applyParsedCompany,
   applyParsedDirector,
+  applyParsedDirectorsList,
   applyParsedFiling,
   applyParsedShareholding,
+  applyParsedSubscribers,
   parseDocument,
 } from "@/app/actions/parse";
 
@@ -161,6 +163,21 @@ export default async function ReviewPage({ params }: { params: { id: string } })
         <SectionCard key={s.key} section={s} extracted={extracted} docId={doc.id} />
       ))}
 
+      {Array.isArray(extracted.subscribers) && extracted.subscribers.length > 0 && (
+        <SubscribersSection
+          rows={extracted.subscribers as Array<Record<string, FieldSlot>>}
+          docId={doc.id}
+          capital={extracted.capital as Record<string, FieldSlot> | undefined}
+        />
+      )}
+
+      {Array.isArray(extracted.directors) && extracted.directors.length > 0 && (
+        <DirectorsListSection
+          rows={extracted.directors as Array<Record<string, FieldSlot>>}
+          docId={doc.id}
+        />
+      )}
+
       {renderable.length === 0 && payload && matched && (
         <section className="card text-center text-sm text-slate-500">
           Playbook matched but no actionable fields were extracted. Check the rules for{" "}
@@ -239,6 +256,134 @@ function prettify(name: string): string {
     .replace(/([A-Z])/g, " $1")
     .replace(/^./, (s) => s.toUpperCase())
     .trim();
+}
+
+function SubscribersSection({
+  rows, docId, capital,
+}: {
+  rows: Array<Record<string, FieldSlot>>;
+  docId: string;
+  capital: Record<string, FieldSlot> | undefined;
+}) {
+  const defaultFaceValue =
+    capital && typeof (capital.faceValue as FieldSlot)?.value !== "undefined"
+      ? String((capital.faceValue as FieldSlot).value)
+      : "";
+  return (
+    <section className="card">
+      <header className="mb-3">
+        <h2 className="text-base font-semibold">MOA subscribers → opening cap table</h2>
+        <p className="text-xs text-slate-500">
+          One row per subscriber from the MOA. Accepting creates a Shareholder + a
+          ShareholdingEntry (transaction type <code>OPENING_BALANCE</code>) per row.
+          Edit any cell first.
+        </p>
+      </header>
+      <form action={applyParsedSubscribers} className="space-y-3">
+        <input type="hidden" name="documentId" value={docId} />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className="label">As-of date (date of subscription)</label>
+            <input className="input" type="date" name="asOfDate" required />
+          </div>
+          <div>
+            <label className="label">Face value per share</label>
+            <input
+              className="input"
+              type="number"
+              step="0.01"
+              name="faceValue"
+              required
+              defaultValue={defaultFaceValue}
+            />
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Father / S/O / W/O</th>
+                <th>Address</th>
+                <th>Occupation</th>
+                <th>PAN</th>
+                <th>Shares</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, i) => (
+                <tr key={i}>
+                  <td><input className="input !py-1" name={`subscriber.${i}.name`} defaultValue={cellValue(row.name)} /></td>
+                  <td><input className="input !py-1" name={`subscriber.${i}.fatherName`} defaultValue={cellValue(row.fatherName)} /></td>
+                  <td><input className="input !py-1" name={`subscriber.${i}.address`} defaultValue={cellValue(row.address)} /></td>
+                  <td><input className="input !py-1" name={`subscriber.${i}.occupation`} defaultValue={cellValue(row.occupation)} /></td>
+                  <td><input className="input !py-1" name={`subscriber.${i}.pan`} defaultValue={cellValue(row.pan)} /></td>
+                  <td><input className="input !py-1" type="number" name={`subscriber.${i}.shares`} defaultValue={cellValue(row.shares)} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <button className="btn" type="submit">
+          Accept {rows.length} subscriber{rows.length === 1 ? "" : "s"} → opening cap table
+        </button>
+      </form>
+    </section>
+  );
+}
+
+function DirectorsListSection({
+  rows, docId,
+}: { rows: Array<Record<string, FieldSlot>>; docId: string }) {
+  return (
+    <section className="card">
+      <header className="mb-3">
+        <h2 className="text-base font-semibold">Directors → current Directorships</h2>
+        <p className="text-xs text-slate-500">
+          One row per director from the MCA Master Data. Accepting upserts the
+          Director master (DIN-keyed) and creates a Directorship for this company.
+          Rows where the DIN cell holds a PAN are skipped automatically.
+        </p>
+      </header>
+      <form action={applyParsedDirectorsList}>
+        <input type="hidden" name="documentId" value={docId} />
+        <div className="overflow-x-auto">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>DIN</th>
+                <th>Name</th>
+                <th>Designation</th>
+                <th>Appointed</th>
+                <th>Ceased</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, i) => (
+                <tr key={i}>
+                  <td><input className="input !py-1" name={`director.${i}.din`} defaultValue={cellValue(row.din)} pattern="\d{8}" /></td>
+                  <td><input className="input !py-1" name={`director.${i}.name`} defaultValue={cellValue(row.name)} /></td>
+                  <td><input className="input !py-1" name={`director.${i}.designation`} defaultValue={cellValue(row.designation) || "Director"} /></td>
+                  <td><input className="input !py-1" type="date" name={`director.${i}.appointmentDate`} defaultValue={cellValue(row.appointmentDate)} /></td>
+                  <td><input className="input !py-1" type="date" name={`director.${i}.cessationDate`} defaultValue={cellValue(row.cessationDate)} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <button className="btn mt-3" type="submit">
+          Accept {rows.length} director{rows.length === 1 ? "" : "s"} → directorships
+        </button>
+      </form>
+    </section>
+  );
+}
+
+function cellValue(slot: FieldSlot | undefined): string {
+  if (!slot || slot.value === null || slot.value === undefined) return "";
+  return String(slot.value);
 }
 
 function isEntityFields(v: unknown): v is EntityFields {

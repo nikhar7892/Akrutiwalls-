@@ -1,6 +1,7 @@
-# Articles of Association. Highly variable — companies adopt Table F verbatim,
-# customise heavily, or somewhere between. Rules only confirm the doc is AOA;
-# real understanding is deferred to the Ask Anything LLM tool.
+# Articles of Association. Varies a lot between companies. Rules try to pull
+# the basics: name, whether Table F is adopted, restated authorised capital,
+# directors-count limits. Everything else (transfer restrictions, drag/tag-along,
+# tie-breaking) is free-text legal prose, best handed to the Ask Anything tool.
 form: AOA
 description: Articles of Association
 
@@ -11,10 +12,51 @@ match:
     - "Table F"
     - "Regulations of the Company"
     - "Interpretation"
+    - "Regulations contained in"
 
 regex:
   - field: company.name
     pattern: '(?:Articles of Association of|Company name)\s*[:\-]?\s*([A-Z][A-Z0-9 .,&\-]+(?:PRIVATE\s+LIMITED|LIMITED|LLP))'
+    confidence: 0.85
+
+  # Table F adoption — almost every Pvt Ltd AOA references this.
+  - field: company.aoaType
+    pattern: '(?:regulations contained in (?:Table\s*F|Schedule\s*I)[^\n.]{0,80}shall\s+apply)'
+    confidence: 0.85
+  - field: company.tableFAdopted
+    pattern: '(?:Table\s*F[^\n.]{0,40}(?:apply|adopted|incorporated))'
+    confidence: 0.9
+
+  # Restated authorised capital — usually appears in the Share Capital article.
+  - field: capital.authorizedAmount
+    pattern: '(?:Authori[sz]ed\s+(?:Share\s+)?Capital(?:\s+of\s+the\s+Company)?(?:\s+is)?)\s*(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d{1,2})?)'
+    transform: number
+    confidence: 0.8
+  - field: capital.faceValue
+    pattern: 'shares?\s*of\s*(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d{1,2})?)\s*each'
+    transform: number
+    confidence: 0.75
+
+  # Board composition — many AOAs set min/max directors.
+  - field: governance.minDirectors
+    pattern: '(?:[Mm]inimum)\s+number\s+of\s+[Dd]irectors[^0-9\n]{0,40}([2-9]|1[0-5])'
+    transform: int
+    confidence: 0.8
+  - field: governance.maxDirectors
+    pattern: '(?:[Mm]aximum)\s+number\s+of\s+[Dd]irectors[^0-9\n]{0,40}(\d{1,2})'
+    transform: int
+    confidence: 0.8
+  - field: governance.quorum
+    pattern: '(?:quorum)[^0-9\n]{0,60}(\d{1,2})\s*(?:members|directors)'
+    transform: int
+    confidence: 0.75
+
+  # Share classes referenced in the AOA.
+  - field: governance.hasPreferenceShares
+    pattern: '(?:preference\s+shares?)'
+    confidence: 0.7
+  - field: governance.hasCCPS
+    pattern: '(?:compulsorily\s+convertible\s+preference|CCPS)'
     confidence: 0.7
 
 writes_to:
@@ -25,11 +67,10 @@ writes_to:
 llm:
   system: |
     You are reading the Articles of Association of an Indian Private Limited
-    company. Identify whether they adopt Table F as-is, are modified Table F,
-    or a custom drafting; surface any unusual restrictions an auditor / CA
-    should know about.
+    company. Classify it (Table F as-is vs modified vs custom drafting) and
+    flag anything an auditor / CA should know about.
   fields:
     company.aoaType:
-      description: "One of: TABLE_F, MODIFIED_TABLE_F, CUSTOM."
+      description: "One of: TABLE_F (adopts Table F verbatim), MODIFIED_TABLE_F (adopts with edits), CUSTOM (full bespoke)."
     company.aoaNotes:
-      description: "Two-sentence summary of any unusual articles (share transfer restrictions, board composition limits, drag-along/tag-along clauses, etc.). null if standard."
+      description: "Two-sentence summary of any unusual articles — share-transfer restrictions, drag-along, tag-along, board-composition rights, dispute-resolution carveouts, etc. Return null if standard Table F."

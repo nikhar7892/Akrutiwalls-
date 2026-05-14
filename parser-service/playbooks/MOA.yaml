@@ -1,6 +1,6 @@
 # Memorandum of Association. Six clauses (Name, Office State, Objects,
-# Liability, Capital, Subscribers). Rules grab the capital + name; the objects
-# clause and subscriber table are noisy and best handed to Haiku later.
+# Liability, Capital, Subscribers). Rules grab the identity + capital;
+# subscribers come from a table pass; objects clause is a free-text LLM hook.
 form: MOA
 description: Memorandum of Association (constitutional document)
 
@@ -14,29 +14,56 @@ match:
     - "share capital of the company"
 
 regex:
-  # Clause I — Name. Usually appears as "1. The name of the company is ..."
+  # Clause I — Name.
   - field: company.name
     pattern: '(?:name of the (?:company|Company) is|"Name of the Company")\s*[:"]?\s*([A-Z][A-Z0-9 .,&\-]+(?:PRIVATE\s+LIMITED|LIMITED|LLP))'
-    confidence: 0.85
+    confidence: 0.9
 
-  # Clause II — Registered office state. "The registered office of the company will be situated in the State of <X>"
+  # Clause II — Registered office state.
   - field: address.state
     pattern: '(?:registered office.*?situated in.*?State of|State of)\s+([A-Z][A-Za-z ]+?)(?:\.|,|\n)'
-    confidence: 0.7
+    confidence: 0.8
 
-  # Clause V — Capital. "The share capital of the company is Rs. X divided into Y shares of Rs. Z each"
+  # Clause V — Capital.
   - field: capital.authorizedAmount
     pattern: '(?:share capital.*?is|authori[sz]ed (?:share )?capital.*?(?:is|of))\s*(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d{1,2})?)'
     transform: number
-    confidence: 0.85
+    confidence: 0.9
   - field: capital.authorizedShares
     pattern: 'divided into\s*([\d,]+)\s*(?:equity\s*)?shares?\s*of'
     transform: int
-    confidence: 0.85
+    confidence: 0.9
   - field: capital.faceValue
     pattern: 'shares?\s*of\s*(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d{1,2})?)\s*(?:each|/\-?\s*each)'
     transform: number
-    confidence: 0.85
+    confidence: 0.9
+
+# Subscriber table (mandated by Schedule I of the Companies Act). pdfplumber
+# pulls it as a table; we map columns by header text and emit one record per row.
+tables:
+  - target: subscribers
+    min_data_rows: 1
+    require: [name, shares]
+    columns:
+      - field: name
+        matches: '^(?:name|name\s+(?:of\s+the\s+)?subscriber)'
+        confidence: 0.9
+      - field: fatherName
+        matches: "father|s/o|d/o|w/o|guardian"
+        confidence: 0.85
+      - field: address
+        matches: "address|residence|location"
+        confidence: 0.85
+      - field: occupation
+        matches: "occupation|description|profession"
+        confidence: 0.85
+      - field: nationality
+        matches: "nationality"
+        confidence: 0.85
+      - field: shares
+        matches: "shares?\\s*(?:subscribed|taken|held)|number\\s+of\\s+(?:equity\\s+)?shares?"
+        transform: int
+        confidence: 0.9
 
 defaults:
   capital.changeReason: "INITIAL"
@@ -52,14 +79,19 @@ writes_to:
   - entity: CapitalHistory
     fields: [authorizedAmount, authorizedShares, faceValue, paidUpAmount, changeReason, effectiveFrom]
     requires: [authorizedAmount]
+  - entity: Subscribers
+    list: true
+    target: subscribers
+    fields: [name, fatherName, address, occupation, nationality, shares]
+    requires: [name, shares]
 
 llm:
   system: |
     You are reading the Memorandum of Association of an Indian Private Limited
-    company. Extract only the fields requested below from the clause headings.
-    Do NOT make anything up — return null if a clause isn't visible in the snippet.
+    company. Extract only the fields requested below. Return null if a clause
+    isn't visible in the snippet — do not make anything up.
   fields:
     company.objectsClause:
-      description: "Brief one-line summary of the main objects of the company (clause III)."
+      description: "One-line summary of the main objects (clause III) — e.g. 'Computer programming, IT consultancy, and related services'."
     company.businessNature:
-      description: "Two-or-three-word business nature inferred from the objects clause (e.g. 'computer programming and IT consultancy')."
+      description: "Two-or-three-word business nature inferred from objects (e.g. 'IT services', 'manufacturing of textiles')."

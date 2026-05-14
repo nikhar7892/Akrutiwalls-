@@ -214,6 +214,164 @@ export async function applyParsedDirector(formData: FormData) {
   revalidatePath("/company/directors");
 }
 
+/**
+ * Apply parsed MOA subscribers as ShareholderEntry OPENING_BALANCE rows.
+ *
+ * The review UI submits N rows like:
+ *   subscriber.0.name, subscriber.0.shares, subscriber.0.address, ...
+ *   subscriber.1.name, subscriber.1.shares, ...
+ *
+ * We resolve / create one Shareholder per name, then write one
+ * ShareholdingEntry per row with transactionType=OPENING_BALANCE.
+ */
+export async function applyParsedSubscribers(formData: FormData) {
+  const { user, company } = await requireActiveCompany();
+  const asOfDate = String(formData.get("asOfDate") || "");
+  const faceValueRaw = String(formData.get("faceValue") || "");
+  if (!asOfDate || !faceValueRaw) {
+    throw new Error("As-of date and face value are required to record subscribers");
+  }
+  const effectiveAsOf = new Date(asOfDate);
+
+  // Collect rows from the multipart payload.
+  const rows = new Map<number, Record<string, string>>();
+  for (const [k, v] of formData.entries()) {
+    const m = k.match(/^subscriber\.(\d+)\.(\w+)$/);
+    if (!m) continue;
+    const idx = Number(m[1]);
+    const field = m[2];
+    const val = typeof v === "string" ? v.trim() : "";
+    if (!val) continue;
+    if (!rows.has(idx)) rows.set(idx, {});
+    rows.get(idx)![field] = val;
+  }
+  if (rows.size === 0) throw new Error("No subscribers selected");
+
+  let created = 0;
+  for (const [, row] of [...rows.entries()].sort((a, b) => a[0] - b[0])) {
+    if (!row.name || !row.shares) continue;
+    const sharesNum = BigInt(row.shares.replace(/[, ]+/g, ""));
+    if (sharesNum <= 0n) continue;
+
+    const existing = await prisma.shareholder.findFirst({
+      where: {
+        companyId: company.id,
+        OR: [
+          row.pan ? { pan: row.pan } : { name: row.name },
+          { name: row.name },
+        ],
+      },
+    });
+    const sh =
+      existing ??
+      (await prisma.shareholder.create({
+        data: {
+          companyId: company.id,
+          name: row.name,
+          pan: row.pan || null,
+          address: row.address || null,
+          type: (row.type as never) || "INDIVIDUAL",
+        },
+      }));
+
+    const entry = await prisma.shareholdingEntry.create({
+      data: {
+        companyId: company.id,
+        shareholderId: sh.id,
+        shareClass: (row.shareClass as never) || "EQUITY",
+        transactionType: "OPENING_BALANCE",
+        numberOfShares: sharesNum,
+        faceValue: faceValueRaw,
+        premium: null,
+        asOfDate: effectiveAsOf,
+        notes: "From MOA subscribers (parsed)",
+      },
+    });
+    await recordAudit({
+      userId: user.id,
+      companyId: company.id,
+      entity: "ShareholdingEntry",
+      entityId: entry.id,
+      action: "create",
+      after: { ...entry, numberOfShares: entry.numberOfShares.toString() },
+    });
+    created++;
+  }
+
+  revalidatePath("/company/shareholding");
+  revalidatePath("/dashboard");
+  return { created };
+}
+
+/**
+ * Bulk-apply parsed directors (e.g. from MCA21 Master Data) as Director +
+ * Directorship rows. Existing DINs are upserted; new DINs get a fresh
+ * Director row.
+ */
+export async function applyParsedDirectorsList(formData: FormData) {
+  const { user, company } = await requireActiveCompany();
+  const rows = new Map<number, Record<string, string>>();
+  for (const [k, v] of formData.entries()) {
+    const m = k.match(/^director\.(\d+)\.(\w+)$/);
+    if (!m) continue;
+    const idx = Number(m[1]);
+    const field = m[2];
+    const val = typeof v === "string" ? v.trim() : "";
+    if (!val) continue;
+    if (!rows.has(idx)) rows.set(idx, {});
+    rows.get(idx)![field] = val;
+  }
+  if (rows.size === 0) throw new Error("No directors selected");
+
+  let created = 0;
+  for (const [, row] of [...rows.entries()].sort((a, b) => a[0] - b[0])) {
+    if (!row.din || !row.name) continue;
+    if (!/^\d{8}$/.test(row.din)) continue; // skip junk rows where the column is a PAN
+
+    const director = await prisma.director.upsert({
+      where: { din: row.din },
+      create: {
+        din: row.din,
+        name: row.name,
+        pan: row.pan || null,
+        nationality: row.nationality || "Indian",
+      },
+      update: { name: row.name },
+    });
+
+    // Idempotency — don't create duplicate directorships for the same company / director / appointment date.
+    const appointmentDate = row.appointmentDate ? new Date(row.appointmentDate) : new Date();
+    const dupe = await prisma.directorship.findFirst({
+      where: { companyId: company.id, directorId: director.id, appointmentDate },
+    });
+    if (dupe) continue;
+
+    const entry = await prisma.directorship.create({
+      data: {
+        companyId: company.id,
+        directorId: director.id,
+        designation: (row.designation?.toUpperCase().replaceAll(" ", "_") as never) || "DIRECTOR",
+        appointmentDate,
+        cessationDate: row.cessationDate ? new Date(row.cessationDate) : null,
+        notes: "From MCA Master Data (parsed)",
+      },
+    });
+    await recordAudit({
+      userId: user.id,
+      companyId: company.id,
+      entity: "Directorship",
+      entityId: entry.id,
+      action: "create",
+      after: entry,
+    });
+    created++;
+  }
+
+  revalidatePath("/company/directors");
+  revalidatePath("/dashboard");
+  return { created };
+}
+
 export async function applyParsedCompany(formData: FormData) {
   const { user, company } = await requireActiveCompany();
   const c = picks(formData, "company");
