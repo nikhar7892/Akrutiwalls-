@@ -1,0 +1,426 @@
+// Akrutiwalls MCA — Company Master schema (Phase 1: manual entry + doc upload)
+// Versioning strategy: append-only history rows for capital, address, directorships,
+// shareholding. The "current" view is computed as the open row (effective_to IS NULL)
+// or the latest effective_from. This keeps every change auditable and supports
+// point-in-time queries needed for AOC-4 / MGT-7 / past-year reporting.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Identity & access ----------
+
+enum UserRole {
+  ADMIN          // your team's superuser
+  STAFF          // your team member (can be granted to many companies)
+  CLIENT         // external user belonging to a single company
+}
+
+enum MembershipRole {
+  OWNER          // company owner (typically a client admin)
+  EDITOR         // can edit master data + upload
+  VIEWER         // read-only
+}
+
+model User {
+  id            String        @id @default(cuid())
+  email         String        @unique
+  passwordHash  String
+  name          String?
+  role          UserRole      @default(STAFF)
+  isActive      Boolean       @default(true)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  memberships   Membership[]
+  auditEntries  AuditLog[]
+  uploads       Document[]    @relation("DocUploadedBy")
+}
+
+model Membership {
+  id          String          @id @default(cuid())
+  userId      String
+  companyId   String
+  role        MembershipRole  @default(VIEWER)
+  createdAt   DateTime        @default(now())
+
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company     Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, companyId])
+  @@index([companyId])
+}
+
+// ---------- Company core ----------
+
+enum CompanyClass {
+  PRIVATE
+  PUBLIC
+  OPC
+  LLP
+  SECTION_8
+}
+
+enum CompanyStatus {
+  ACTIVE
+  DORMANT
+  STRIKE_OFF
+  UNDER_LIQUIDATION
+  DISSOLVED
+  AMALGAMATED
+}
+
+enum ListingStatus {
+  UNLISTED
+  LISTED
+}
+
+model Company {
+  id                String          @id @default(cuid())
+  cin               String          @unique
+  name              String
+  formerNames       String[]        @default([])
+  pan               String?
+  tan               String?
+  gstin             String?
+  rocCode           String?
+  registrationNo    String?
+  dateOfIncorporation DateTime?
+  emailOfficial     String?
+  phoneOfficial     String?
+  website           String?
+
+  companyClass      CompanyClass    @default(PRIVATE)
+  status            CompanyStatus   @default(ACTIVE)
+  listingStatus     ListingStatus   @default(UNLISTED)
+
+  mainNicCode       String?
+  businessNature    String?         // free text description of business
+
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  memberships       Membership[]
+  addresses         Address[]
+  capitalHistory    CapitalHistory[]
+  directorships     Directorship[]
+  shareholdings    ShareholdingEntry[]
+  shareholders      Shareholder[]
+  documents         Document[]
+  filings           Filing[]
+  auditEntries      AuditLog[]
+}
+
+// ---------- Address (versioned) ----------
+
+enum AddressType {
+  REGISTERED
+  CORPORATE
+  CORRESPONDENCE
+  FACTORY
+  BRANCH
+}
+
+model Address {
+  id            String       @id @default(cuid())
+  companyId     String
+  type          AddressType  @default(REGISTERED)
+  line1         String
+  line2         String?
+  city          String
+  state         String
+  pin           String
+  country       String       @default("India")
+  email         String?
+  phone         String?
+  effectiveFrom DateTime
+  effectiveTo   DateTime?    // null = current
+  changeFiling  String?      // SRN / form reference (e.g. INC-22)
+  notes         String?
+  createdAt     DateTime     @default(now())
+
+  company       Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, type, effectiveTo])
+}
+
+// ---------- Capital (versioned) ----------
+
+enum CapitalChangeReason {
+  INITIAL
+  ALLOTMENT
+  BUYBACK
+  BONUS
+  SPLIT
+  CONSOLIDATION
+  REDUCTION
+  CONVERSION
+  OTHER
+}
+
+model CapitalHistory {
+  id                  String              @id @default(cuid())
+  companyId           String
+  authorizedAmount    Decimal             @db.Decimal(18, 2)
+  paidUpAmount        Decimal             @db.Decimal(18, 2)
+  faceValue           Decimal             @db.Decimal(18, 2)
+  authorizedShares    BigInt
+  paidUpShares        BigInt
+  effectiveFrom       DateTime
+  effectiveTo         DateTime?
+  changeReason        CapitalChangeReason @default(INITIAL)
+  changeFiling        String?             // SH-7 / PAS-3 SRN
+  notes               String?
+  createdAt           DateTime            @default(now())
+
+  company             Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, effectiveTo])
+}
+
+// ---------- Directors / KMP ----------
+
+enum DirectorDesignation {
+  DIRECTOR
+  MANAGING_DIRECTOR
+  WHOLE_TIME_DIRECTOR
+  INDEPENDENT_DIRECTOR
+  NOMINEE_DIRECTOR
+  ADDITIONAL_DIRECTOR
+  ALTERNATE_DIRECTOR
+  CHAIRMAN
+  CFO
+  CS
+  CEO
+}
+
+model Director {
+  id           String          @id @default(cuid())
+  din          String          @unique
+  name         String
+  pan          String?
+  dob          DateTime?
+  nationality  String?         @default("Indian")
+  email        String?
+  phone        String?
+  address      String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  directorships Directorship[]
+}
+
+model Directorship {
+  id                 String              @id @default(cuid())
+  companyId          String
+  directorId         String
+  designation        DirectorDesignation @default(DIRECTOR)
+  appointmentDate    DateTime
+  cessationDate      DateTime?           // null = currently serving
+  appointmentMode    String?             // DIR-12 SRN etc.
+  cessationMode      String?
+  notes              String?
+  createdAt          DateTime            @default(now())
+
+  company            Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  director           Director            @relation(fields: [directorId], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, directorId, appointmentDate])
+  @@index([companyId, cessationDate])
+}
+
+// ---------- Shareholders / Cap table ----------
+
+enum ShareholderType {
+  INDIVIDUAL
+  BODY_CORPORATE
+  HUF
+  FOREIGN_INDIVIDUAL
+  FOREIGN_CORPORATE
+  TRUST
+  GOVERNMENT
+}
+
+enum ShareClass {
+  EQUITY
+  PREFERENCE
+  CCPS              // compulsorily convertible preference
+  OCPS              // optionally convertible preference
+}
+
+enum ShareTransactionType {
+  ALLOTMENT
+  TRANSFER_IN
+  TRANSFER_OUT
+  BUYBACK
+  BONUS
+  SPLIT
+  CONVERSION
+  OPENING_BALANCE
+}
+
+model Shareholder {
+  id           String              @id @default(cuid())
+  companyId    String
+  name         String
+  pan          String?
+  folio        String?
+  type         ShareholderType     @default(INDIVIDUAL)
+  nationality  String?             @default("Indian")
+  address      String?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  company      Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  entries      ShareholdingEntry[]
+
+  @@index([companyId])
+  @@index([companyId, pan])
+}
+
+// Append-only ledger of share movements; cap table at any date is the
+// running sum of (shareholderId, shareClass) up to that date.
+model ShareholdingEntry {
+  id              String                @id @default(cuid())
+  companyId       String
+  shareholderId   String
+  shareClass      ShareClass            @default(EQUITY)
+  transactionType ShareTransactionType
+  numberOfShares  BigInt                // positive for inflow, negative for outflow
+  faceValue       Decimal               @db.Decimal(18, 2)
+  premium         Decimal?              @db.Decimal(18, 2)
+  asOfDate        DateTime
+  filingReference String?               // PAS-3 / SH-4 etc.
+  notes           String?
+  createdAt       DateTime              @default(now())
+
+  company         Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  shareholder     Shareholder           @relation(fields: [shareholderId], references: [id], onDelete: Restrict)
+
+  @@index([companyId, asOfDate])
+  @@index([companyId, shareholderId, shareClass])
+}
+
+// ---------- Documents ----------
+
+enum DocumentCategory {
+  MASTER            // one-time / forever (MOA, AOA, CIN, PAN, TAN, GST cert, board seal)
+  YEARLY            // FY-tagged (ITR, audited financials, AOC-4, MGT-7, DIR-3 KYC, board report, AGM minutes)
+  FILING            // attachments to a specific filing/SRN
+  OTHER
+}
+
+enum DocumentType {
+  // Master
+  CIN_CERTIFICATE
+  MOA
+  AOA
+  PAN_CARD
+  TAN_CERTIFICATE
+  GST_CERTIFICATE
+  COMMON_SEAL
+  REGISTERED_OFFICE_PROOF
+  BOARD_RESOLUTION
+
+  // Yearly
+  ITR
+  FINANCIALS_AUDITED
+  FINANCIALS_PROVISIONAL
+  AOC_4
+  MGT_7
+  MGT_7A
+  DIR_3_KYC
+  BOARD_REPORT
+  AGM_MINUTES
+  SIGNIFICANT_NOTES
+  AUDITORS_REPORT
+
+  // Filing
+  FORM_INC_22
+  FORM_DIR_12
+  FORM_SH_7
+  FORM_PAS_3
+  FORM_MGT_14
+  CHALLAN
+
+  OTHER
+}
+
+model Document {
+  id              String           @id @default(cuid())
+  companyId       String
+  category        DocumentCategory
+  docType         DocumentType
+  title           String
+  fy              String?          // e.g. "2023-24" for yearly docs
+  storageKey      String           // path or S3 key
+  mimeType        String?
+  sizeBytes       Int?
+  checksum        String?
+  uploadedById    String
+  source          String           @default("manual") // manual | parsed | imported
+  parsedPayload   Json?            // future: extracted fields from parser
+  version         Int              @default(1)
+  notes           String?
+  createdAt       DateTime         @default(now())
+
+  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  uploadedBy      User             @relation("DocUploadedBy", fields: [uploadedById], references: [id])
+
+  @@index([companyId, category])
+  @@index([companyId, docType, fy])
+}
+
+// ---------- Filings log ----------
+
+enum FilingStatus {
+  PENDING
+  FILED
+  APPROVED
+  REJECTED
+  RESUBMITTED
+}
+
+model Filing {
+  id            String        @id @default(cuid())
+  companyId     String
+  form          String        // e.g. INC-22, DIR-12, SH-7, PAS-3, AOC-4, MGT-7
+  srn           String?
+  fy            String?
+  filedOn       DateTime?
+  status        FilingStatus  @default(PENDING)
+  remarks       String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, form])
+}
+
+// ---------- Audit log ----------
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  companyId   String?
+  userId      String?
+  entity      String   // e.g. "Company", "Director", "CapitalHistory"
+  entityId    String?
+  action      String   // "create" | "update" | "delete"
+  before      Json?
+  after       Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  company     Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, entity, createdAt])
+  @@index([userId, createdAt])
+}

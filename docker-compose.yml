@@ -1,0 +1,41 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: akrutiwalls
+      POSTGRES_PASSWORD: akrutiwalls
+      POSTGRES_DB: akrutiwalls
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U akrutiwalls"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://akrutiwalls:akrutiwalls@db:5432/akrutiwalls?schema=public
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-please-change-me-in-production}
+      STORAGE_DRIVER: local
+      STORAGE_LOCAL_DIR: /app/storage
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@akrutiwalls.local}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-changeme123}
+    volumes:
+      - storage-data:/app/storage
+    ports:
+      - "3000:3000"
+    command: sh -c "npx prisma migrate deploy && node server.js"
+
+volumes:
+  db-data:
+  storage-data:
