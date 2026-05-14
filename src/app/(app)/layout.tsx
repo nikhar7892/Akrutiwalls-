@@ -11,7 +11,7 @@ const NAV = [
   { href: "/company/directors", label: "Directors" },
   { href: "/company/shareholding", label: "Shareholding / Cap Table" },
   { href: "/company/documents", label: "Documents" },
-  { href: "/company/filings", label: "Filings" },
+  { href: "/company/filings", label: "MCA Forms & Filings" },
 ];
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {

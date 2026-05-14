@@ -352,28 +352,34 @@ enum DocumentType {
 }
 
 model Document {
-  id              String           @id @default(cuid())
+  id              String                @id @default(cuid())
   companyId       String
   category        DocumentCategory
   docType         DocumentType
   title           String
-  fy              String?          // e.g. "2023-24" for yearly docs
-  storageKey      String           // path or S3 key
+  fy              String?               // e.g. "2023-24" for yearly docs
+  storageKey      String                // path or S3 key
   mimeType        String?
   sizeBytes       Int?
   checksum        String?
   uploadedById    String
-  source          String           @default("manual") // manual | parsed | imported
-  parsedPayload   Json?            // future: extracted fields from parser
-  version         Int              @default(1)
+  source          String                @default("manual") // manual | parsed | imported
+  parsedPayload   Json?                 // future: extracted fields from parser
+  version         Int                   @default(1)
   notes           String?
-  createdAt       DateTime         @default(now())
+  createdAt       DateTime              @default(now())
 
-  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  uploadedBy      User             @relation("DocUploadedBy", fields: [uploadedById], references: [id])
+  // Optional link to a Filing (when this doc is the form PDF / challan / supporting attachment)
+  filingId        String?
+  attachmentRole  FilingAttachmentRole?
+
+  company         Company               @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  uploadedBy      User                  @relation("DocUploadedBy", fields: [uploadedById], references: [id])
+  filing          Filing?               @relation("FilingAttachments", fields: [filingId], references: [id], onDelete: SetNull)
 
   @@index([companyId, category])
   @@index([companyId, docType, fy])
+  @@index([filingId])
 }
 
 // ---------- Filings log ----------
@@ -386,11 +392,19 @@ enum FilingStatus {
   RESUBMITTED
 }
 
+enum FilingAttachmentRole {
+  FORM         // the signed/uploaded form PDF itself
+  CHALLAN      // payment challan / receipt
+  OTHER        // any supporting attachment
+}
+
 model Filing {
   id            String        @id @default(cuid())
   companyId     String
   form          String        // e.g. INC-22, DIR-12, SH-7, PAS-3, AOC-4, MGT-7
   srn           String?
+  purpose       String?       // free-text purpose of the form
+  amountPaid    Decimal?      @db.Decimal(18, 2)
   fy            String?
   filedOn       DateTime?
   status        FilingStatus  @default(PENDING)
@@ -399,8 +413,10 @@ model Filing {
   updatedAt     DateTime      @updatedAt
 
   company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  attachments   Document[]    @relation("FilingAttachments")
 
   @@index([companyId, form])
+  @@index([companyId, srn])
 }
 
 // ---------- Audit log ----------

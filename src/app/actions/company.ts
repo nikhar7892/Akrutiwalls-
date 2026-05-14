@@ -5,6 +5,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { requireActiveCompany } from "@/lib/session";
 import { recordAudit } from "@/lib/audit";
+import { saveUpload } from "@/lib/storage";
 
 // ---------- Identity ----------
 
@@ -361,27 +362,74 @@ export async function addShareholdingEntry(formData: FormData) {
 const FilingSchema = z.object({
   form: z.string().min(2),
   srn: z.string().optional().nullable(),
+  purpose: z.string().optional().nullable(),
+  amountPaid: z.string().optional().nullable(),
   fy: z.string().optional().nullable(),
   filedOn: z.string().optional().nullable(),
   status: z.enum(["PENDING", "FILED", "APPROVED", "REJECTED", "RESUBMITTED"]),
   remarks: z.string().optional().nullable(),
 });
 
+async function attachFile(
+  companyId: string,
+  userId: string,
+  filingId: string,
+  form: string,
+  file: File,
+  role: "FORM" | "CHALLAN" | "OTHER",
+) {
+  if (!file || file.size === 0) return null;
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const stored = await saveUpload(companyId, file.name, buffer, file.type);
+  return prisma.document.create({
+    data: {
+      companyId,
+      category: "FILING",
+      docType: role === "CHALLAN" ? "CHALLAN" : "OTHER",
+      title: `${form} ${role === "FORM" ? "form" : role === "CHALLAN" ? "challan" : "attachment"} — ${file.name}`,
+      storageKey: stored.storageKey,
+      mimeType: stored.mimeType || null,
+      sizeBytes: stored.sizeBytes,
+      checksum: stored.checksum,
+      uploadedById: userId,
+      filingId,
+      attachmentRole: role,
+      source: "manual",
+    },
+  });
+}
+
 export async function addFiling(formData: FormData) {
   const { user, company } = await requireActiveCompany();
-  const raw = Object.fromEntries(formData.entries());
-  const parsed = FilingSchema.parse(raw);
+  const parsed = FilingSchema.parse({
+    form: formData.get("form"),
+    srn: formData.get("srn"),
+    purpose: formData.get("purpose"),
+    amountPaid: formData.get("amountPaid"),
+    fy: formData.get("fy"),
+    filedOn: formData.get("filedOn"),
+    status: formData.get("status"),
+    remarks: formData.get("remarks"),
+  });
   const created = await prisma.filing.create({
     data: {
       companyId: company.id,
       form: parsed.form,
       srn: parsed.srn || null,
+      purpose: parsed.purpose || null,
+      amountPaid: parsed.amountPaid ? parsed.amountPaid : null,
       fy: parsed.fy || null,
       filedOn: parsed.filedOn ? new Date(parsed.filedOn) : null,
       status: parsed.status,
       remarks: parsed.remarks || null,
     },
   });
+
+  const formFile = formData.get("formFile") as File | null;
+  const challanFile = formData.get("challanFile") as File | null;
+  if (formFile && formFile.size > 0) await attachFile(company.id, user.id, created.id, parsed.form, formFile, "FORM");
+  if (challanFile && challanFile.size > 0) await attachFile(company.id, user.id, created.id, parsed.form, challanFile, "CHALLAN");
+
   await recordAudit({
     userId: user.id,
     companyId: company.id,
@@ -391,4 +439,38 @@ export async function addFiling(formData: FormData) {
     after: created,
   });
   revalidatePath("/company/filings");
+  revalidatePath("/company/documents");
+  revalidatePath("/dashboard");
+}
+
+export async function addFilingAttachment(formData: FormData) {
+  const { user, company } = await requireActiveCompany();
+  const filingId = String(formData.get("filingId") || "");
+  const role = String(formData.get("role") || "OTHER") as "FORM" | "CHALLAN" | "OTHER";
+  const file = formData.get("file") as File | null;
+  if (!filingId || !file) throw new Error("Missing fields");
+  const filing = await prisma.filing.findUnique({ where: { id: filingId } });
+  if (!filing || filing.companyId !== company.id) throw new Error("Not found");
+  await attachFile(company.id, user.id, filing.id, filing.form, file, role);
+  revalidatePath("/company/filings");
+  revalidatePath("/company/documents");
+}
+
+export async function deleteFilingAttachment(formData: FormData) {
+  const { user, company } = await requireActiveCompany();
+  const id = String(formData.get("id") || "");
+  if (!id) throw new Error("Missing id");
+  const doc = await prisma.document.findUnique({ where: { id } });
+  if (!doc || doc.companyId !== company.id) throw new Error("Not found");
+  await prisma.document.delete({ where: { id } });
+  await recordAudit({
+    userId: user.id,
+    companyId: company.id,
+    entity: "Document",
+    entityId: id,
+    action: "delete",
+    before: { id: doc.id, title: doc.title, filingId: doc.filingId },
+  });
+  revalidatePath("/company/filings");
+  revalidatePath("/company/documents");
 }
