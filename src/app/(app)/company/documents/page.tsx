@@ -1,6 +1,8 @@
+import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { requireActiveCompany } from "@/lib/session";
 import { uploadDocument } from "@/app/actions/documents";
+import { parseDocument } from "@/app/actions/parse";
 
 export const dynamic = "force-dynamic";
 
@@ -99,7 +101,7 @@ function DocSection({
 }: {
   title: string;
   showFy?: boolean;
-  docs: Array<{ id: string; title: string; docType: string; fy: string | null; sizeBytes: number | null; mimeType: string | null; createdAt: Date; uploadedBy: { email: string } }>;
+  docs: Array<{ id: string; title: string; docType: string; fy: string | null; sizeBytes: number | null; mimeType: string | null; createdAt: Date; uploadedBy: { email: string }; parsedPayload: unknown }>;
 }) {
   if (docs.length === 0) return null;
   return (
@@ -112,21 +114,43 @@ function DocSection({
           </tr>
         </thead>
         <tbody>
-          {docs.map((d) => (
-            <tr key={d.id}>
-              <td>{d.title}</td>
-              <td>{d.docType.replaceAll("_", " ")}</td>
-              {showFy && <td>{d.fy ?? "—"}</td>}
-              <td>{d.sizeBytes ? `${(d.sizeBytes / 1024).toFixed(1)} KB` : "—"}</td>
-              <td>
-                {d.createdAt.toISOString().slice(0, 10)}
-                <div className="text-xs text-slate-400">{d.uploadedBy.email}</div>
-              </td>
-              <td>
-                <a className="text-blue-600 underline" href={`/api/documents/${d.id}`} target="_blank">Open</a>
-              </td>
-            </tr>
-          ))}
+          {docs.map((d) => {
+            const parsed = Boolean(d.parsedPayload);
+            const isPdf = (d.mimeType || "").toLowerCase().includes("pdf");
+            return (
+              <tr key={d.id}>
+                <td>
+                  {d.title}
+                  {parsed && (
+                    <span className="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800">
+                      parsed
+                    </span>
+                  )}
+                </td>
+                <td>{d.docType.replaceAll("_", " ")}</td>
+                {showFy && <td>{d.fy ?? "—"}</td>}
+                <td>{d.sizeBytes ? `${(d.sizeBytes / 1024).toFixed(1)} KB` : "—"}</td>
+                <td>
+                  {d.createdAt.toISOString().slice(0, 10)}
+                  <div className="text-xs text-slate-400">{d.uploadedBy.email}</div>
+                </td>
+                <td className="flex items-center gap-3 whitespace-nowrap">
+                  <a className="text-blue-600 underline" href={`/api/documents/${d.id}`} target="_blank">Open</a>
+                  {isPdf && !parsed && (
+                    <form action={parseDocument}>
+                      <input type="hidden" name="documentId" value={d.id} />
+                      <button className="text-blue-600 underline" type="submit">Parse</button>
+                    </form>
+                  )}
+                  {parsed && (
+                    <Link className="text-blue-600 underline" href={`/company/documents/${d.id}/review`}>
+                      Review
+                    </Link>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </section>

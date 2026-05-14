@@ -1,0 +1,49 @@
+# AOC-4 — Filing of financial statements and other documents with the Registrar.
+form: AOC-4
+description: Annual filing of financial statements
+
+match:
+  text_contains:
+    - "Form No. AOC-4"
+    - "AOC-4"
+  text_contains_any:
+    - "financial statements"
+    - "form for filing financial statements"
+
+acroform:
+  CIN: company.cin
+  CompanyName: company.name
+  FinancialYearStart: filing.fyStart
+  FinancialYearEnd: filing.fyEnd
+  DateOfBoardMeeting: filing.boardMeetingDate
+  DateOfAGM: filing.agmDate
+  AuthorisedCapital: capital.authorizedAmount
+  AuthorizedCapital: capital.authorizedAmount
+  PaidUpCapital: capital.paidUpAmount
+
+regex:
+  - field: filing.srn
+    pattern: 'SRN[\s:]+([A-Z]\d{8})'
+    confidence: 0.95
+  - field: filing.fy
+    pattern: '(?:financial year|FY)[\s:]+(\d{4}[-/]\d{2,4})'
+    transform: fy
+    confidence: 0.9
+  - field: filing.amountPaid
+    pattern: '(?:Fee[s]?\s+Paid|Amount\s+Paid|Total\s+Fee[s]?|Fee[s]?)[\s:]*(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d{1,2})?)'
+    transform: number
+    confidence: 0.9
+  - field: filing.filedOn
+    pattern: '(?:Filed|Date of filing)[\s:on]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.9
+
+defaults:
+  filing.form: "AOC-4"
+  filing.purpose: "Filing of financial statements"
+  filing.status: "FILED"
+
+writes_to:
+  - entity: Filing
+    fields: [form, srn, fy, amountPaid, filedOn, purpose, status]
+    requires: [form, fy]

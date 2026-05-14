@@ -22,9 +22,11 @@ companies, while client users see exactly one.
 | **Filings log** — SRN, form, FY, status | ✅ |
 | **Audit log** for every change | ✅ |
 | **Multi-tenant auth** — staff has many memberships, clients have one | ✅ |
-| Parser for MOA/AOA/CIN | ⏳ Phase 2 |
-| Auto director report / financials / notes | ⏳ Phase 3 |
-| AOC-4 / MGT-7 extraction, Tally import, Ask Anything | ⏳ Phase 4+ |
+| **Form parser** (INC-22, DIR-12, SH-7, PAS-3, AOC-4, MGT-7, challan) — playbook-driven, deterministic, with optional Haiku LLM fallback | ✅ |
+| **Review & accept UI** — extract diffed against master with per-field source + confidence | ✅ |
+| MOA / AOA parser | ⏳ Phase 3 |
+| Auto director report / financials / notes | ⏳ Phase 4 |
+| Tally import, Ask Anything | ⏳ Phase 5+ |
 
 ## Tech stack
 
@@ -106,13 +108,51 @@ The image is portable (`output: "standalone"`). Recommended for India clients:
 - **Secrets**: keep `NEXTAUTH_SECRET` and DB credentials in `.env` (root-only
   read on the server) or use the host's secret manager.
 
-## Roadmap (post-Phase 1)
+## Parser (Phase 2 — shipped)
 
-1. **Parser pipeline**: PDF text + tables → extract clauses (objects, capital,
-   subscribers) → reviewable diff before applying to master.
+Uploaded MCA PDFs can be parsed with one click. Architecture:
+
+```
+PDF upload  →  Next.js /actions/parse.ts  →  Python sidecar (FastAPI)
+                                                ├─ pypdf:    AcroForm fields
+                                                ├─ pdfplumber: text + tables
+                                                ├─ Tesseract:  OCR for scans
+                                                ├─ Playbook engine: YAML rules per form
+                                                └─ Haiku 4.5 (optional, behind flag)
+                                                                 ↓
+                              Document.parsedPayload stores the structured extract
+                                                                 ↓
+                                /company/documents/[id]/review shows it field-by-field
+                                                                 ↓
+                            CA accepts → fields flow into Address / Capital / Directorship
+                                          / Filing / ShareholdingEntry via server actions
+```
+
+**Each form is one YAML in `parser-service/playbooks/`.** Shipping with
+INC-22, DIR-12, SH-7, PAS-3, AOC-4, MGT-7 and a generic CHALLAN reader.
+Adding a new form type = adding one YAML — no code changes. See
+`parser-service/README.md` for the playbook spec.
+
+**Cost profile.** AcroForm + regex cover ~95% of MCA portal-generated PDFs
+with zero LLM tokens. The Haiku fallback (off by default) is for free-text
+fields like "purpose of resolution" on a scanned BR/EGM. At typical volume
+the LLM bill is < ₹100/year.
+
+To run the parser separately during dev:
+```bash
+cd parser-service
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8000
+```
+
+## Roadmap (post-Phase 2)
+
+1. **MOA / AOA parser**: extract subscriber tables, capital clause, objects
+   clauses → propose diffs against the master.
 2. **Auto director report / financials / notes**: templated generation from master
    + year-wise figures + previous year's docs.
-3. **Form extraction**: derive AOC-4 / MGT-7 fields from master + Tally / financials.
+3. **Form generation**: derive AOC-4 / MGT-7 fields from master + Tally / financials
+   to pre-fill outgoing filings.
 4. **Ask Anything assistant**: tool-using LLM with tools like
    `get_cap_table(date)`, `get_documents(type, fy)`, `get_directors(date)`,
    `get_capital_history()` — answers either return data, tables, or the matching

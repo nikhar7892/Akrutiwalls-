@@ -1,0 +1,45 @@
+# MCA Challan / payment receipt.
+form: CHALLAN
+description: MCA payment challan / receipt accompanying a filing
+
+match:
+  text_contains_any:
+    - "Challan"
+    - "Payment Receipt"
+    - "Acknowledgement"
+    - "MCA21"
+
+acroform:
+  SRN: filing.srn
+  ServiceRequestNumber: filing.srn
+  CIN: company.cin
+  FormName: filing.form
+  AmountPaid: filing.amountPaid
+  Amount: filing.amountPaid
+  PaymentDate: filing.filedOn
+
+regex:
+  - field: filing.srn
+    pattern: 'SRN[\s:]+([A-Z]\d{8})'
+    confidence: 0.98
+  - field: filing.amountPaid
+    pattern: '(?:Total\s*Amount|Amount\s*Paid|Total)[\s:Rs.₹]*([\d,]+(?:\.\d{1,2})?)'
+    transform: number
+    confidence: 0.95
+  - field: filing.filedOn
+    pattern: '(?:Date of Payment|Payment Date|Dated)[\s:]+(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.9
+  - field: filing.form
+    pattern: '\b(INC-\d+|DIR-\d+|SH-\d+|PAS-\d+|MGT-\d+[A]?|AOC-\d+|ADT-\d+|DPT-\d+|MR-\d+)\b'
+    transform: upper
+    confidence: 0.9
+
+defaults:
+  filing.status: "FILED"
+  filing.purpose: "Payment challan"
+
+writes_to:
+  - entity: Filing
+    fields: [form, srn, amountPaid, filedOn, purpose, status]
+    requires: [form, srn]

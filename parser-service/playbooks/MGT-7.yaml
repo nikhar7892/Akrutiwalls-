@@ -1,0 +1,48 @@
+# MGT-7 (and MGT-7A for small companies) — Annual Return.
+form: MGT-7
+description: Annual Return of a company
+
+match:
+  text_contains:
+    - "Form No. MGT-7"
+    - "Form No. MGT-7A"
+    - "MGT-7"
+  text_contains_any:
+    - "Annual Return"
+    - "Annual return of a company"
+
+acroform:
+  CIN: company.cin
+  CompanyName: company.name
+  FinancialYearEnd: filing.fyEnd
+  DateOfAGM: filing.agmDate
+  PaidUpCapital: capital.paidUpAmount
+  AuthorisedCapital: capital.authorizedAmount
+  AuthorizedCapital: capital.authorizedAmount
+
+regex:
+  - field: filing.srn
+    pattern: 'SRN[\s:]+([A-Z]\d{8})'
+    confidence: 0.95
+  - field: filing.fy
+    pattern: '(?:financial year|FY)[\s:]+(\d{4}[-/]\d{2,4})'
+    transform: fy
+    confidence: 0.9
+  - field: filing.amountPaid
+    pattern: '(?:Fee[s]?\s+Paid|Amount\s+Paid|Total\s+Fee[s]?|Fee[s]?)[\s:]*(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d{1,2})?)'
+    transform: number
+    confidence: 0.9
+  - field: filing.filedOn
+    pattern: '(?:Filed|Date of filing)[\s:on]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.9
+
+defaults:
+  filing.form: "MGT-7"
+  filing.purpose: "Annual Return"
+  filing.status: "FILED"
+
+writes_to:
+  - entity: Filing
+    fields: [form, srn, fy, amountPaid, filedOn, purpose, status]
+    requires: [form, fy]

@@ -1,0 +1,74 @@
+# SH-7 — Notice to Registrar of any alteration of share capital.
+form: SH-7
+description: Alteration of share capital (increase in authorized capital, etc.)
+
+match:
+  text_contains:
+    - "Form No. SH-7"
+    - "SH-7"
+  text_contains_any:
+    - "alteration of share capital"
+    - "Notice to Registrar"
+    - "authorised capital"
+    - "authorized capital"
+
+acroform:
+  CIN: company.cin
+  CompanyName: company.name
+  AuthorisedCapital: capital.authorizedAmount
+  AuthorizedCapital: capital.authorizedAmount
+  PaidUpCapital: capital.paidUpAmount
+  FaceValue: capital.faceValue
+  NumberOfShares: capital.authorizedShares
+  EffectiveDate: capital.effectiveFrom
+  DateOfResolution: capital.effectiveFrom
+
+regex:
+  - field: filing.srn
+    pattern: 'SRN[\s:]+([A-Z]\d{8})'
+    confidence: 0.95
+  - field: capital.authorizedAmount
+    pattern: '(?:authorised|authorized)\s+(?:share\s+)?capital[\s:Rs.₹]*([\d,]+(?:\.\d{1,2})?)'
+    transform: number
+    confidence: 0.85
+  - field: capital.paidUpAmount
+    pattern: 'paid[-\s]?up\s+(?:share\s+)?capital[\s:Rs.₹]*([\d,]+(?:\.\d{1,2})?)'
+    transform: number
+    confidence: 0.85
+  - field: capital.faceValue
+    pattern: 'face\s+value[\s:of]*[Rs.₹]*([\d,]+(?:\.\d{1,2})?)'
+    transform: number
+    confidence: 0.8
+  - field: filing.amountPaid
+    pattern: '(?:Fee[s]?\s+Paid|Amount\s+Paid|Total\s+Fee[s]?|Fee[s]?)[\s:]*(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d{1,2})?)'
+    transform: number
+    confidence: 0.9
+  - field: filing.filedOn
+    pattern: '(?:Filed|Date of filing)[\s:on]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.9
+
+defaults:
+  filing.form: "SH-7"
+  filing.purpose: "Alteration of share capital"
+  filing.status: "FILED"
+  capital.changeReason: "OTHER"
+
+writes_to:
+  - entity: CapitalHistory
+    fields: [authorizedAmount, paidUpAmount, faceValue, authorizedShares, effectiveFrom, changeReason]
+    requires: [authorizedAmount, paidUpAmount, effectiveFrom]
+    transforms:
+      effectiveFrom: date
+      authorizedShares: int
+  - entity: Filing
+    fields: [form, srn, amountPaid, filedOn, purpose, status]
+    requires: [form]
+
+llm:
+  system: |
+    You are reading an Indian MCA SH-7 filing about an alteration of share capital.
+    Find the change reason (allotment, bonus, split, consolidation, reduction, conversion).
+  fields:
+    capital.changeReason:
+      description: "One of: INITIAL, ALLOTMENT, BUYBACK, BONUS, SPLIT, CONSOLIDATION, REDUCTION, CONVERSION, OTHER."

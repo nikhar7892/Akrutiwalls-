@@ -1,0 +1,66 @@
+# INC-22 — Notice of situation or change of registered office.
+form: INC-22
+description: Notice of situation or change of registered office of the company
+
+match:
+  text_contains:
+    - "Form No. INC-22"
+    - "INC-22"
+  text_contains_any:
+    - "Notice of situation"
+    - "registered office"
+
+# AcroForm field name → extract path.
+# Field names vary across MCA portal vintages; the engine matches case-insensitively
+# AND falls back to substring match, so common variants will still hit.
+acroform:
+  CIN: company.cin
+  CompanyName: company.name
+  Email: address.email
+  EmailID: address.email
+  RegisteredOfficeAddressLine1: address.line1
+  RegisteredOfficeAddressLine2: address.line2
+  City: address.city
+  State: address.state
+  PIN: address.pin
+  PINCode: address.pin
+  PhoneNo: address.phone
+  EffectiveDate: address.effectiveFrom
+
+regex:
+  - field: filing.srn
+    pattern: 'SRN[\s:]+([A-Z]\d{8})'
+    confidence: 0.95
+  - field: filing.amountPaid
+    pattern: '(?:Fee[s]?\s+Paid|Amount\s+Paid|Total\s+Fee[s]?|Fee[s]?)[\s:]*(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d{1,2})?)'
+    transform: number
+    confidence: 0.9
+  - field: filing.filedOn
+    pattern: '(?:Filed|Date of filing)[\s:on]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.9
+  - field: address.effectiveFrom
+    pattern: '(?:effective from|w\.e\.f\.?)[\s:]+(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.85
+  - field: company.cin
+    pattern: '\b([UL]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})\b'
+    transform: upper
+    confidence: 0.95
+
+defaults:
+  filing.form: "INC-22"
+  filing.purpose: "Notice of situation / change of registered office"
+  filing.status: "FILED"
+  address.type: "REGISTERED"
+  address.country: "India"
+
+writes_to:
+  - entity: Address
+    fields: [type, line1, line2, city, state, pin, email, phone, effectiveFrom, country]
+    requires: [line1, city, state, pin, effectiveFrom]
+    transforms:
+      effectiveFrom: date
+  - entity: Filing
+    fields: [form, srn, amountPaid, filedOn, purpose, status]
+    requires: [form]

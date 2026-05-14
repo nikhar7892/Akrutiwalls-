@@ -16,11 +16,31 @@ services:
       timeout: 5s
       retries: 10
 
+  parser:
+    build: ./parser-service
+    restart: unless-stopped
+    environment:
+      PARSER_SHARED_SECRET: ${PARSER_SHARED_SECRET:-change-me-parser-secret}
+      PARSER_LLM_ENABLED: ${PARSER_LLM_ENABLED:-false}
+      PARSER_LLM_MODEL: ${PARSER_LLM_MODEL:-claude-haiku-4-5}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    expose:
+      - "8000"
+    ports:
+      - "8000:8000"  # remove this line in production; only the app needs to reach it
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
   app:
     build: .
     restart: unless-stopped
     depends_on:
       db:
+        condition: service_healthy
+      parser:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://akrutiwalls:akrutiwalls@db:5432/akrutiwalls?schema=public
@@ -28,6 +48,8 @@ services:
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-please-change-me-in-production}
       STORAGE_DRIVER: local
       STORAGE_LOCAL_DIR: /app/storage
+      PARSER_SERVICE_URL: http://parser:8000
+      PARSER_SHARED_SECRET: ${PARSER_SHARED_SECRET:-change-me-parser-secret}
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@akrutiwalls.local}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-changeme123}
     volumes:

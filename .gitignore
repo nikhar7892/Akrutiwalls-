@@ -12,3 +12,8 @@ storage/
 .idea/
 coverage/
 dist/
+parser-service/.venv/
+parser-service/**/__pycache__/
+**/__pycache__/
+*.pyc
+storage/

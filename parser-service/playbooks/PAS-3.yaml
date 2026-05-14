@@ -1,0 +1,68 @@
+# PAS-3 — Return of allotment of shares.
+form: PAS-3
+description: Return of allotment of shares (issue of further equity / preference shares)
+
+match:
+  text_contains:
+    - "Form No. PAS-3"
+    - "PAS-3"
+  text_contains_any:
+    - "Return of allotment"
+    - "allotment of shares"
+
+acroform:
+  CIN: company.cin
+  CompanyName: company.name
+  AllotmentDate: shareholding.asOfDate
+  DateOfAllotment: shareholding.asOfDate
+  NumberOfShares: shareholding.numberOfShares
+  FaceValue: shareholding.faceValue
+  Premium: shareholding.premium
+  ClassOfShares: shareholding.shareClass
+
+regex:
+  - field: filing.srn
+    pattern: 'SRN[\s:]+([A-Z]\d{8})'
+    confidence: 0.95
+  - field: filing.amountPaid
+    pattern: '(?:Fee[s]?\s+Paid|Amount\s+Paid|Total\s+Fee[s]?|Fee[s]?)[\s:]*(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d{1,2})?)'
+    transform: number
+    confidence: 0.9
+  - field: shareholding.asOfDate
+    pattern: '(?:date of allotment|allotted on)[\s:]+(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.9
+  - field: filing.filedOn
+    pattern: '(?:Filed|Date of filing)[\s:on]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.9
+
+defaults:
+  filing.form: "PAS-3"
+  filing.purpose: "Return of allotment of shares"
+  filing.status: "FILED"
+  shareholding.transactionType: "ALLOTMENT"
+  shareholding.shareClass: "EQUITY"
+
+writes_to:
+  - entity: ShareholdingEntry
+    fields: [shareClass, transactionType, numberOfShares, faceValue, premium, asOfDate]
+    requires: [numberOfShares, faceValue, asOfDate]
+    transforms:
+      asOfDate: date
+      numberOfShares: int
+      faceValue: number
+      premium: number
+  - entity: Filing
+    fields: [form, srn, amountPaid, filedOn, purpose, status]
+    requires: [form]
+
+llm:
+  system: |
+    Read this PAS-3 (return of allotment) for an Indian Pvt Ltd. The model will
+    fill missing fields where the rules could not find them.
+  fields:
+    shareholding.shareholderName:
+      description: "Name of the allottee (single name; first one if multiple)."
+    shareholding.shareClass:
+      description: "EQUITY, PREFERENCE, CCPS, or OCPS."
