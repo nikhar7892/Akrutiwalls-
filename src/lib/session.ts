@@ -10,7 +10,7 @@ export type SessionUser = {
   id: string;
   email: string;
   name?: string | null;
-  role: "ADMIN" | "STAFF" | "CLIENT";
+  role: "PLATFORM_ADMIN" | "FIRM_ADMIN" | "STAFF" | "CLIENT" | "ADMIN";
 };
 
 export async function requireUser(): Promise<SessionUser> {
@@ -39,8 +39,9 @@ export async function requireActiveCompany() {
   });
 
   if (memberships.length === 0) {
-    // Admins should go bootstrap companies; everyone else gets a friendly dead end.
-    redirect(user.role === "ADMIN" ? "/admin" : "/no-access");
+    // Platform admins should go bootstrap firms/companies; everyone else gets a friendly dead end.
+    const isAdmin = user.role === "PLATFORM_ADMIN" || user.role === "ADMIN";
+    redirect(isAdmin ? "/admin" : "/no-access");
   }
 
   const active =

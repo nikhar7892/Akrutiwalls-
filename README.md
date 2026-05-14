@@ -97,6 +97,47 @@ Stored locally under `./storage/<companyId>/<timestamp>-<sha>-<filename>`. Switc
 to S3 by setting `STORAGE_DRIVER=s3` and implementing the driver branch in
 `src/lib/storage.ts`.
 
+## White-label & custom domains
+
+The platform is multi-tenant: one **Firm** per CA/CS practice. Every Firm
+has its own brand (name, logo, colours, support email, footer) and can
+serve from its own domain (e.g. `mca.acmeca.in`) — clients of that firm
+only ever see the firm's brand, never the platform's.
+
+### Wiring a custom domain for a firm
+
+1. **In /admin → Firms**, edit the firm and set `customDomain = mca.acmeca.in`.
+2. **DNS** — the CA points a CNAME (`mca.acmeca.in CNAME app.yourplatform.com`).
+3. **TLS** — terminate at your reverse proxy. Caddy auto-issues a Let's
+   Encrypt cert per domain:
+
+   ```caddyfile
+   # /etc/caddy/Caddyfile on the host
+   app.yourplatform.com,
+   mca.acmeca.in,
+   mca.beta-ca.in {
+       reverse_proxy app:3000
+   }
+   ```
+
+   Caddy reads the comma-separated host list and obtains a cert for each.
+   Add a line each time you onboard a firm; reload with `caddy reload`.
+4. The Next.js app looks up the incoming `Host` header against
+   `Firm.customDomain` on every request — no app restart needed.
+
+### Previewing locally
+
+Set the dev-time cookie `akr_firm_slug=<firm-slug>` (or click "Preview as …"
+on the firm edit page). The resolver falls back to the platform's default
+firm when neither the cookie nor a domain match.
+
+### Roles
+
+- `PLATFORM_ADMIN` — you (the SaaS operator). Manages firms, can see everything.
+- `FIRM_ADMIN` — the CA partner. (Self-serve branding UI comes when you're ready.)
+- `STAFF` — a CA's team member.
+- `CLIENT` — external client, scoped to one company within their firm.
+
 ## Hosting
 
 The image is portable (`output: "standalone"`). Recommended for India clients:

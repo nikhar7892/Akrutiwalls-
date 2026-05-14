@@ -13,12 +13,46 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ---------- Tenancy: Firms (white-label) ----------
+// A Firm is one CA / CS practice using the platform. The platform operator
+// (PLATFORM_ADMIN) hosts every firm; each firm sees the product under its own
+// name, logo, colours, and (eventually) custom domain — clients of that firm
+// only ever see the firm's branding.
+
+model Firm {
+  id            String   @id @default(cuid())
+  slug          String   @unique
+  name          String                                // internal name
+  productName   String                                // shown to users, e.g. "Acme CA MCA"
+  customDomain  String?  @unique                      // e.g. mca.acmeca.in (CNAME → platform host)
+  isDefault     Boolean  @default(false)              // the platform's own / fallback firm
+  isActive      Boolean  @default(true)
+
+  // Branding
+  logoUrl       String?
+  faviconUrl    String?
+  primaryColor  String   @default("#1f2937")          // CSS var --brand-primary
+  accentColor   String   @default("#2563eb")          // CSS var --brand-accent
+  supportEmail  String?
+  footerText    String?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  users         User[]
+  companies     Company[]
+
+  @@index([customDomain])
+}
+
 // ---------- Identity & access ----------
 
 enum UserRole {
-  ADMIN          // your team's superuser
-  STAFF          // your team member (can be granted to many companies)
-  CLIENT         // external user belonging to a single company
+  PLATFORM_ADMIN // platform operator (you)
+  FIRM_ADMIN     // CA partner who runs a firm
+  STAFF          // works inside a firm; can be granted memberships to its companies
+  CLIENT         // external client; sees one company within a firm
+  ADMIN          // DEPRECATED — kept so existing rows still load; treat as PLATFORM_ADMIN
 }
 
 enum MembershipRole {
@@ -34,12 +68,16 @@ model User {
   name          String?
   role          UserRole      @default(STAFF)
   isActive      Boolean       @default(true)
+  firmId        String?
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
+  firm          Firm?         @relation(fields: [firmId], references: [id], onDelete: SetNull)
   memberships   Membership[]
   auditEntries  AuditLog[]
   uploads       Document[]    @relation("DocUploadedBy")
+
+  @@index([firmId])
 }
 
 model Membership {
@@ -82,6 +120,7 @@ enum ListingStatus {
 
 model Company {
   id                String          @id @default(cuid())
+  firmId            String?
   cin               String          @unique
   name              String
   formerNames       String[]        @default([])
@@ -105,6 +144,7 @@ model Company {
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt
 
+  firm              Firm?           @relation(fields: [firmId], references: [id], onDelete: SetNull)
   memberships       Membership[]
   addresses         Address[]
   capitalHistory    CapitalHistory[]
@@ -114,6 +154,8 @@ model Company {
   documents         Document[]
   filings           Filing[]
   auditEntries      AuditLog[]
+
+  @@index([firmId])
 }
 
 // ---------- Address (versioned) ----------

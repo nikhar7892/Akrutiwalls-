@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/session";
 import { createCompany, createUser, grantMembership } from "@/app/actions/admin";
@@ -7,41 +8,65 @@ export const dynamic = "force-dynamic";
 
 export default async function AdminPage() {
   const user = await requireUser();
-  if (user.role !== "ADMIN") redirect("/dashboard");
+  if (user.role !== "PLATFORM_ADMIN" && user.role !== "ADMIN") redirect("/dashboard");
 
-  const [companies, users] = await Promise.all([
-    prisma.company.findMany({ orderBy: { name: "asc" }, include: { memberships: { include: { user: true } } } }),
-    prisma.user.findMany({ orderBy: { email: "asc" } }),
+  const [firms, companies, users] = await Promise.all([
+    prisma.firm.findMany({ orderBy: [{ isDefault: "desc" }, { name: "asc" }] }),
+    prisma.company.findMany({ orderBy: { name: "asc" }, include: { firm: true, memberships: { include: { user: true } } } }),
+    prisma.user.findMany({ orderBy: { email: "asc" }, include: { firm: true } }),
   ]);
+  const defaultFirmId = firms.find((f) => f.isDefault)?.id ?? firms[0]?.id ?? "";
 
   return (
     <div className="max-w-5xl space-y-6">
       <header>
         <h1 className="text-xl font-semibold">Admin</h1>
-        <p className="text-sm text-slate-500">Create companies, users, and grant memberships.</p>
+        <p className="text-sm text-slate-500">Create firms, companies, users, and grant memberships.</p>
       </header>
+
+      <section className="card flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-semibold">Firms</h2>
+          <p className="mt-1 text-xs text-slate-500">
+            {firms.length} firm{firms.length === 1 ? "" : "s"} on the platform. Each firm has its own brand,
+            custom domain, staff, and client companies.
+          </p>
+        </div>
+        <Link className="btn-secondary" href="/admin/firms">Manage firms</Link>
+      </section>
 
       <section className="card">
         <h2 className="text-base font-semibold">Create company</h2>
-        <form action={createCompany} className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <form action={createCompany} className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-4">
           <input className="input sm:col-span-2" name="name" placeholder="Company name" required />
           <input className="input" name="cin" placeholder="CIN" required />
-          <button className="btn sm:col-span-3" type="submit">Create company</button>
+          <select className="input" name="firmId" defaultValue={defaultFirmId}>
+            {firms.map((f) => (
+              <option key={f.id} value={f.id}>{f.productName}</option>
+            ))}
+          </select>
+          <button className="btn sm:col-span-4" type="submit">Create company</button>
         </form>
       </section>
 
       <section className="card">
         <h2 className="text-base font-semibold">Create user</h2>
-        <form action={createUser} className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-4">
+        <form action={createUser} className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-5">
           <input className="input" name="email" type="email" placeholder="Email" required />
           <input className="input" name="password" placeholder="Initial password" required />
           <input className="input" name="name" placeholder="Display name" />
           <select className="input" name="role" defaultValue="STAFF">
-            <option value="ADMIN">ADMIN</option>
+            <option value="PLATFORM_ADMIN">PLATFORM_ADMIN</option>
+            <option value="FIRM_ADMIN">FIRM_ADMIN</option>
             <option value="STAFF">STAFF</option>
             <option value="CLIENT">CLIENT</option>
           </select>
-          <button className="btn sm:col-span-4" type="submit">Create user</button>
+          <select className="input" name="firmId" defaultValue={defaultFirmId}>
+            {firms.map((f) => (
+              <option key={f.id} value={f.id}>{f.productName}</option>
+            ))}
+          </select>
+          <button className="btn sm:col-span-5" type="submit">Create user</button>
         </form>
       </section>
 
@@ -51,11 +76,19 @@ export default async function AdminPage() {
         <form action={grantMembership} className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-4">
           <select className="input" name="userId" required>
             <option value="">Pick user…</option>
-            {users.map((u) => <option key={u.id} value={u.id}>{u.email} ({u.role})</option>)}
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.email} ({u.role}{u.firm ? ` · ${u.firm.productName}` : ""})
+              </option>
+            ))}
           </select>
           <select className="input" name="companyId" required>
             <option value="">Pick company…</option>
-            {companies.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {companies.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}{c.firm ? ` · ${c.firm.productName}` : ""}
+              </option>
+            ))}
           </select>
           <select className="input" name="role" defaultValue="EDITOR">
             <option value="OWNER">OWNER</option>
@@ -69,12 +102,13 @@ export default async function AdminPage() {
       <section className="card overflow-x-auto">
         <h2 className="mb-3 text-base font-semibold">Companies &amp; members</h2>
         <table className="table">
-          <thead><tr><th>Company</th><th>CIN</th><th>Members</th></tr></thead>
+          <thead><tr><th>Company</th><th>Firm</th><th>CIN</th><th>Members</th></tr></thead>
           <tbody>
             {companies.map((c) => (
               <tr key={c.id}>
                 <td>{c.name}</td>
-                <td>{c.cin}</td>
+                <td className="text-xs">{c.firm?.productName ?? "—"}</td>
+                <td className="text-xs">{c.cin}</td>
                 <td>
                   <ul className="space-y-1">
                     {c.memberships.map((m) => (
