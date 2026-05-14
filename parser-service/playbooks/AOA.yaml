@@ -1,0 +1,35 @@
+# Articles of Association. Highly variable — companies adopt Table F verbatim,
+# customise heavily, or somewhere between. Rules only confirm the doc is AOA;
+# real understanding is deferred to the Ask Anything LLM tool.
+form: AOA
+description: Articles of Association
+
+match:
+  text_contains:
+    - "Articles of Association"
+  text_contains_any:
+    - "Table F"
+    - "Regulations of the Company"
+    - "Interpretation"
+
+regex:
+  - field: company.name
+    pattern: '(?:Articles of Association of|Company name)\s*[:\-]?\s*([A-Z][A-Z0-9 .,&\-]+(?:PRIVATE\s+LIMITED|LIMITED|LLP))'
+    confidence: 0.7
+
+writes_to:
+  - entity: Company
+    fields: [name]
+    requires: []
+
+llm:
+  system: |
+    You are reading the Articles of Association of an Indian Private Limited
+    company. Identify whether they adopt Table F as-is, are modified Table F,
+    or a custom drafting; surface any unusual restrictions an auditor / CA
+    should know about.
+  fields:
+    company.aoaType:
+      description: "One of: TABLE_F, MODIFIED_TABLE_F, CUSTOM."
+    company.aoaNotes:
+      description: "Two-sentence summary of any unusual articles (share transfer restrictions, board composition limits, drag-along/tag-along clauses, etc.). null if standard."

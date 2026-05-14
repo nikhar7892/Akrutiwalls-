@@ -214,6 +214,42 @@ export async function applyParsedDirector(formData: FormData) {
   revalidatePath("/company/directors");
 }
 
+export async function applyParsedCompany(formData: FormData) {
+  const { user, company } = await requireActiveCompany();
+  const c = picks(formData, "company");
+  if (Object.keys(c).length === 0) throw new Error("Nothing to update");
+  const before = await prisma.company.findUnique({ where: { id: company.id } });
+  const updated = await prisma.company.update({
+    where: { id: company.id },
+    data: {
+      ...(c.cin && { cin: c.cin.toUpperCase() }),
+      ...(c.name && { name: c.name }),
+      ...(c.pan && { pan: c.pan.toUpperCase() }),
+      ...(c.tan && { tan: c.tan.toUpperCase() }),
+      ...(c.gstin && { gstin: c.gstin.toUpperCase() }),
+      ...(c.udyamNumber && { udyamNumber: c.udyamNumber.toUpperCase() }),
+      ...(c.dpiitNumber && { dpiitNumber: c.dpiitNumber.toUpperCase() }),
+      ...(c.iecNumber && { iecNumber: c.iecNumber }),
+      ...(c.rocCode && { rocCode: c.rocCode }),
+      ...(c.registrationNo && { registrationNo: c.registrationNo }),
+      ...(c.dateOfIncorporation && { dateOfIncorporation: new Date(c.dateOfIncorporation) }),
+      ...(c.mainNicCode && { mainNicCode: c.mainNicCode }),
+      ...(c.businessNature && { businessNature: c.businessNature }),
+    },
+  });
+  await recordAudit({
+    userId: user.id,
+    companyId: company.id,
+    entity: "Company",
+    entityId: company.id,
+    action: "update",
+    before,
+    after: updated,
+  });
+  revalidatePath("/company/identity");
+  revalidatePath("/dashboard");
+}
+
 export async function applyParsedShareholding(formData: FormData) {
   const { user, company } = await requireActiveCompany();
   const s = picks(formData, "shareholding");

@@ -1,0 +1,44 @@
+# Import Export Code certificate. Issued by DGFT under the Foreign Trade
+# (Development & Regulation) Act. The IEC is the firm's 10-digit PAN
+# (since post-2015 reforms), embedded in the certificate.
+form: IEC
+description: Import Export Code (IEC) certificate issued by DGFT
+
+match:
+  text_contains_any:
+    - "Import Export Code"
+    - "Import-Export Code"
+    - "IEC"
+    - "Directorate General of Foreign Trade"
+    - "DGFT"
+
+regex:
+  - field: company.iecNumber
+    pattern: '(?:IEC(?:\s*(?:Number|No\.?))?)\s*[:\-]?\s*(\d{10})'
+    confidence: 0.95
+  - field: company.name
+    pattern: '(?:Name of (?:Firm|Applicant|Company)|Firm Name)\s*[:\-]\s*([A-Z][A-Z0-9 .,&\-]{2,})'
+    confidence: 0.85
+  - field: company.pan
+    pattern: '\b([A-Z]{5}\d{4}[A-Z])\b'
+    transform: upper
+    confidence: 0.9
+  - field: filing.filedOn
+    pattern: '(?:Date of (?:Issue|Allotment|Registration))\s*[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.9
+  - field: address.line1
+    pattern: '(?:Address of (?:Firm|Applicant)|Branch Address)\s*[:\-]\s*(.+?)(?:\n|$)'
+    confidence: 0.6
+
+defaults:
+  filing.form: "IEC"
+  filing.purpose: "Import Export Code issuance"
+
+writes_to:
+  - entity: Company
+    fields: [iecNumber, name, pan]
+    requires: [iecNumber]
+  - entity: Filing
+    fields: [form, purpose, filedOn]
+    requires: [form]

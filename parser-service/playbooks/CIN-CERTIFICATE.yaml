@@ -1,0 +1,70 @@
+# Certificate of Incorporation (Form INC-11). Issued by the MCA Registrar on
+# company formation. Foundational master document — pre-fills the entire
+# company identity card on first onboarding.
+form: CIN-CERTIFICATE
+description: Certificate of Incorporation issued by the ROC (Form INC-11)
+
+match:
+  text_contains_any:
+    - "Certificate of Incorporation"
+    - "Form INC-11"
+    - "INC-11"
+    - "Registrar of Companies"
+  text_contains:
+    - "incorporated"
+
+acroform:
+  CIN: company.cin
+  CompanyName: company.name
+  DateOfIncorporation: company.dateOfIncorporation
+  RegistrationNo: company.registrationNo
+  ROCCode: company.rocCode
+  AuthorisedCapital: capital.authorizedAmount
+  AuthorizedCapital: capital.authorizedAmount
+  PaidUpCapital: capital.paidUpAmount
+  RegisteredOfficeLine1: address.line1
+  City: address.city
+  State: address.state
+  PIN: address.pin
+
+regex:
+  - field: company.cin
+    pattern: '\b([UL]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})\b'
+    transform: upper
+    confidence: 0.98
+  - field: company.name
+    pattern: '(?:Name of the Company|hereby certify that)\s*[:\-]?\s*([A-Z][A-Z0-9 .,&\-]+(?:PRIVATE\s+LIMITED|LIMITED|LLP))'
+    confidence: 0.85
+  - field: company.dateOfIncorporation
+    pattern: '(?:incorporated|date of incorporation)[^\d\n]{0,30}(\d{1,2}[-/\s][A-Za-z]+[-/\s]\d{2,4}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.9
+  - field: company.rocCode
+    pattern: '(?:Registrar of Companies|ROC)[\s,]*([A-Za-z]+)'
+    confidence: 0.7
+  - field: capital.authorizedAmount
+    pattern: '(?:authori[sz]ed (?:share )?capital)[\s:Rs.₹]*([\d,]+(?:\.\d{1,2})?)'
+    transform: number
+    confidence: 0.85
+  - field: capital.paidUpAmount
+    pattern: '(?:paid[-\s]?up (?:share )?capital)[\s:Rs.₹]*([\d,]+(?:\.\d{1,2})?)'
+    transform: number
+    confidence: 0.85
+
+defaults:
+  capital.changeReason: "INITIAL"
+  address.type: "REGISTERED"
+  address.country: "India"
+
+writes_to:
+  - entity: Company
+    fields: [cin, name, dateOfIncorporation, registrationNo, rocCode]
+    requires: [cin, name]
+    transforms:
+      dateOfIncorporation: date
+  - entity: Address
+    fields: [type, line1, city, state, pin, country, effectiveFrom]
+    requires: []
+  - entity: CapitalHistory
+    fields: [authorizedAmount, paidUpAmount, faceValue, effectiveFrom, changeReason]
+    requires: [authorizedAmount]

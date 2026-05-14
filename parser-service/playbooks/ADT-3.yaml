@@ -1,0 +1,69 @@
+# ADT-3 — Notice of resignation by the auditor (Section 140(2)). Filed
+# by the auditor (not the company) within 30 days of resignation. Reasons
+# are free-text and typically need Haiku to summarise cleanly.
+form: ADT-3
+description: Notice of resignation by the auditor (Section 140)
+
+match:
+  text_contains:
+    - "ADT-3"
+  text_contains_any:
+    - "Form No. ADT-3"
+    - "Notice of resignation"
+    - "resignation by the auditor"
+
+acroform:
+  CIN: company.cin
+  CompanyName: company.name
+  AuditorName: auditor.name
+  AuditorFirmName: auditor.firmName
+  PAN: auditor.pan
+  MembershipNumber: auditor.membershipNumber
+  FRN: auditor.frn
+  ResignationDate: filing.resignationDate
+  DateOfResignation: filing.resignationDate
+
+regex:
+  - field: filing.srn
+    pattern: 'SRN[\s:]+([A-Z]\d{8})'
+    confidence: 0.95
+  - field: auditor.pan
+    pattern: '\b([A-Z]{5}\d{4}[A-Z])\b'
+    transform: upper
+    confidence: 0.85
+  - field: auditor.frn
+    pattern: '(?:Firm Registration Number|FRN)\s*[:\-]?\s*(\d{6}[A-Z]?\/?[A-Z0-9]*)'
+    confidence: 0.9
+  - field: auditor.membershipNumber
+    pattern: '(?:ICAI Membership(?: Number)?|Membership No\.?)\s*[:\-]?\s*(\d{4,8})'
+    confidence: 0.9
+  - field: filing.resignationDate
+    pattern: '(?:Date of resignation|Resignation Date)\s*[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.95
+  - field: filing.filedOn
+    pattern: '(?:Filed|Date of filing)[\s:on]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.85
+  - field: filing.amountPaid
+    pattern: '(?:Fee[s]?\s+Paid|Amount\s+Paid)[\s:]*(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d{1,2})?)'
+    transform: number
+    confidence: 0.85
+
+defaults:
+  filing.form: "ADT-3"
+  filing.purpose: "Auditor resignation"
+  filing.status: "FILED"
+
+writes_to:
+  - entity: Filing
+    fields: [form, srn, amountPaid, filedOn, purpose, status]
+    requires: [form]
+
+llm:
+  system: |
+    You are reading an ADT-3 (auditor resignation notice) for an Indian
+    company. Extract a clean one-line gist of why the auditor resigned.
+  fields:
+    filing.purpose:
+      description: "One short sentence: 'Resignation due to <reason>'. Use neutral phrasing. Avoid speculation."

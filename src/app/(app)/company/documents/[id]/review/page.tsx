@@ -5,6 +5,7 @@ import { requireActiveCompany } from "@/lib/session";
 import {
   applyParsedAddress,
   applyParsedCapital,
+  applyParsedCompany,
   applyParsedDirector,
   applyParsedFiling,
   applyParsedShareholding,
@@ -27,6 +28,13 @@ type Section = {
 };
 
 const SECTIONS: Section[] = [
+  {
+    key: "company",
+    label: "Company identity",
+    description: "Updates the active company's master (CIN, PAN, TAN, GSTIN, Udyam, DPIIT, IEC, etc.).",
+    action: applyParsedCompany,
+    entities: ["company"],
+  },
   {
     key: "filing",
     label: "MCA Filing",

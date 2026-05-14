@@ -1,0 +1,73 @@
+# ADT-1 — Auditor appointment intimation. Filed within 15 days of AGM
+# under Section 139(1). Post-Companies (Audit & Auditors) Amendment Rules
+# 2025, ADT-1 is mandatory for first auditor appointments too.
+form: ADT-1
+description: Auditor appointment intimation (Section 139)
+
+match:
+  text_contains:
+    - "ADT-1"
+  text_contains_any:
+    - "Form No. ADT-1"
+    - "Notice of appointment"
+    - "appointment of auditor"
+
+acroform:
+  CIN: company.cin
+  CompanyName: company.name
+  AuditorName: auditor.name
+  AuditorFirmName: auditor.firmName
+  PAN: auditor.pan
+  MembershipNumber: auditor.membershipNumber
+  FRN: auditor.frn
+  Email: auditor.email
+  AppointmentDate: filing.appointmentDate
+  DateOfAppointment: filing.appointmentDate
+  AppointmentFrom: filing.periodFrom
+  AppointmentTo: filing.periodTo
+  AGMDate: filing.agmDate
+  DateOfAGM: filing.agmDate
+
+regex:
+  - field: filing.srn
+    pattern: 'SRN[\s:]+([A-Z]\d{8})'
+    confidence: 0.95
+  - field: filing.amountPaid
+    pattern: '(?:Fee[s]?\s+Paid|Amount\s+Paid|Total\s+Fee[s]?|Fee[s]?)[\s:]*(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d{1,2})?)'
+    transform: number
+    confidence: 0.9
+  - field: filing.filedOn
+    pattern: '(?:Filed|Date of filing)[\s:on]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.9
+  - field: auditor.frn
+    pattern: '(?:Firm Registration Number|FRN)\s*[:\-]?\s*(\d{6}[A-Z]?\/?[A-Z0-9]*)'
+    confidence: 0.9
+  - field: auditor.membershipNumber
+    pattern: '(?:ICAI Membership(?: Number)?|Membership No\.?)\s*[:\-]?\s*(\d{4,8})'
+    confidence: 0.9
+  - field: filing.appointmentDate
+    pattern: '(?:Date of (?:appointment|Appointment))\s*[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.9
+  - field: filing.agmDate
+    pattern: '(?:Date of AGM|AGM Date)\s*[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.9
+  - field: filing.periodFrom
+    pattern: '(?:appointment from|Period from)\s*[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.85
+  - field: filing.periodTo
+    pattern: '(?:to)\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    confidence: 0.5
+
+defaults:
+  filing.form: "ADT-1"
+  filing.purpose: "Appointment of Auditor"
+  filing.status: "FILED"
+
+writes_to:
+  - entity: Filing
+    fields: [form, srn, amountPaid, filedOn, purpose, status]
+    requires: [form]

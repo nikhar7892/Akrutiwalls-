@@ -1,0 +1,74 @@
+# MGT-14 — Filing of resolutions and agreements with the ROC under Section
+# 117. Covers board resolutions, special resolutions, and ordinary resolutions
+# in specified cases. Files within 30 days of passing.
+form: MGT-14
+description: Filing of resolutions and agreements (Section 117)
+
+match:
+  text_contains:
+    - "MGT-14"
+  text_contains_any:
+    - "Form No. MGT-14"
+    - "filing of resolutions"
+    - "resolution"
+
+acroform:
+  CIN: company.cin
+  CompanyName: company.name
+  ResolutionType: filing.resolutionType
+  TypeOfResolution: filing.resolutionType
+  DatePassed: filing.passingDate
+  DateOfPassing: filing.passingDate
+  DispatchDate: filing.dispatchDate
+  Section: filing.section
+  NumberOfResolutions: filing.numberOfResolutions
+
+regex:
+  - field: filing.srn
+    pattern: 'SRN[\s:]+([A-Z]\d{8})'
+    confidence: 0.95
+  - field: filing.passingDate
+    pattern: '(?:Date of passing|Date of resolution|Passed on)\s*[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.9
+  - field: filing.dispatchDate
+    pattern: '(?:Date of dispatch|Dispatch Date)\s*[:\-]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.85
+  - field: filing.resolutionType
+    pattern: '(?:Type of (?:Resolution|resolution))\s*[:\-]?\s*(Board|Special|Ordinary|Written)'
+    transform: upper
+    confidence: 0.9
+  - field: filing.section
+    pattern: '(?:under )?[Ss]ection\s+(\d{2,3}(?:\([0-9a-zA-Z]+\))?)'
+    confidence: 0.75
+  - field: filing.numberOfResolutions
+    pattern: '(?:Number of resolutions|Total resolutions)\s*[:\-]?\s*(\d+)'
+    transform: int
+    confidence: 0.8
+  - field: filing.filedOn
+    pattern: '(?:Filed|Date of filing)[\s:on]*(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+    transform: date
+    confidence: 0.9
+  - field: filing.amountPaid
+    pattern: '(?:Fee[s]?\s+Paid|Amount\s+Paid|Total\s+Fee[s]?|Fee[s]?)[\s:]*(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d{1,2})?)'
+    transform: number
+    confidence: 0.9
+
+defaults:
+  filing.form: "MGT-14"
+  filing.purpose: "Filing of resolutions / agreements (Section 117)"
+  filing.status: "FILED"
+
+writes_to:
+  - entity: Filing
+    fields: [form, srn, amountPaid, filedOn, purpose, status]
+    requires: [form]
+
+llm:
+  system: |
+    You are reading an MGT-14 filing for an Indian Pvt Ltd. Identify what
+    the resolution is about — keep the summary concrete and factual.
+  fields:
+    filing.purpose:
+      description: "One short sentence: subject matter of the resolution (e.g. 'Appointment of MD', 'Approval of borrowing limits u/s 180(1)(c)', 'Adoption of new MOA')."

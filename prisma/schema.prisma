@@ -127,6 +127,9 @@ model Company {
   pan               String?
   tan               String?
   gstin             String?
+  udyamNumber       String?         // MSME / Udyam registration
+  dpiitNumber       String?         // DPIIT / Startup India recognition
+  iecNumber         String?         // Import Export Code
   rocCode           String?
   registrationNo    String?
   dateOfIncorporation DateTime?
