@@ -1,7 +1,7 @@
 """
-Persistence layer for Stage 2 extractor outputs.
+Persistence layer for Stage 2 and Stage 3 extractor outputs.
 
-Behaviour per Stage 2 brief:
+Stage 2 (Group A) behaviour:
   - Take an extracted dict from any of the 8 Group A extractors.
   - Run the Stage 1 cross-doc validators against any existing record for the
     same CIN.
@@ -9,9 +9,18 @@ Behaviour per Stage 2 brief:
     surface to caller.
   - SOFT_WARN → write the row(s); log SOFT_WARN entries.
 
+Stage 3 (Group B) addition (S3-R1, SRN-first contract):
+  - If the extracted payload has an ``mca_filing`` chunk, the doc is a Group B
+    filing.  Its SRN is treated as a HARD pre-condition for any child write —
+    we validate the SRN format (``^[A-Z][0-9]{8}$``) and upsert the
+    ``parser_mca_filings`` row FIRST, before any ``parser_resolutions_agreements``,
+    ``parser_auditors``, ``parser_deposits`` or ``parser_directors_kmp`` write.
+    Missing or malformed SRN → HARD_FAIL, abort, log inconsistency.
+
 Tables written are the Stage 1 ``parser_*`` set + the Stage 2 additions
 (``parser_moa_clauses``, ``parser_aoa_clauses``, ``parser_inconsistencies``).
-No other tables touched.
+No new tables introduced in Stage 3 — every Group B target table already
+exists in the Stage 1 schema.
 
 This module talks to Postgres via psycopg 3, reading ``DATABASE_URL`` from
 the environment (same source the existing Prisma client uses).
@@ -28,7 +37,7 @@ from typing import Any, Iterable, Optional
 import psycopg
 from psycopg.rows import dict_row
 
-from parser.identifiers import is_valid_cin
+from parser.identifiers import is_valid_cin, is_valid_srn
 from parser.validation import (
     CrossDocInputs,
     Severity,
@@ -91,12 +100,38 @@ def persist(
     """
     company_chunk = extracted.get("company") or {}
     incoming_cin = company_chunk.get("cin") if isinstance(company_chunk, dict) else None
+    mca_filing_chunk = extracted.get("mca_filing")
+    is_group_b = isinstance(mca_filing_chunk, dict)
+    srn = (mca_filing_chunk or {}).get("srn") if is_group_b else None
 
     # Resolve target CIN — incoming wins if set; else look up by other identifiers
     # (PAN match) so docs without a CIN (PAN card, TAN letter, GST cert) can land
     # against an existing master. `target_cin` is the explicit caller hint.
     with _connect() as conn:
         with conn.cursor() as cur:
+            # S3-R1 pre-check: every Group B doc MUST carry a valid SRN. If not,
+            # no child rows can be written; log HARD_FAIL and abort.
+            if is_group_b and (not srn or not is_valid_srn(srn)):
+                bad_issue = ValidationIssue(
+                    severity=Severity.HARD_FAIL,
+                    field="mca_filing.srn",
+                    sources=[source_doc_type],
+                    message=(f"Group B doc {source_doc_type} missing/invalid SRN "
+                             f"(expected ^[A-Z][0-9]{{8}}$, got {srn!r})"),
+                    expected="^[A-Z][0-9]{8}$",
+                    actual=str(srn) if srn else None,
+                    rule="srn_required_for_mca_filing",
+                )
+                _log_inconsistencies(cur, incoming_cin or target_cin, source_doc_type,
+                                     source_doc_id, [bad_issue])
+                conn.commit()
+                return PersistResult(
+                    accepted=False,
+                    cin=incoming_cin or target_cin,
+                    issues=[bad_issue],
+                    error="Group B SRN missing or malformed — no rows written (S3-R1)",
+                )
+
             existing = _resolve_existing_master(cur, incoming_cin or target_cin, company_chunk)
             existing_cin = existing["cin"] if existing else (incoming_cin or target_cin)
 
@@ -130,19 +165,43 @@ def persist(
                 resolved_cin = _upsert_company(cur, existing, merge_chunk)
                 rows_written["parser_company"] = 1
 
+            # S3-R1: Group B SRN-FIRST. parser_mca_filings is written BEFORE any
+            # child row references it (FK invariant).
+            extra_issues: list[ValidationIssue] = []
+            if is_group_b and resolved_cin:
+                rows_written["parser_mca_filings"] = _upsert_mca_filing(cur, resolved_cin, mca_filing_chunk)
+
             if resolved_cin:
                 rows_written["parser_moa_clauses"] = _insert_moa_clauses(cur, resolved_cin, extracted.get("moa_clauses") or [])
                 rows_written["parser_aoa_clauses"] = _insert_aoa_clauses(cur, resolved_cin, extracted.get("aoa_clauses") or [])
                 rows_written["parser_registrations"] = _insert_registrations(cur, resolved_cin, extracted.get("registrations") or [])
                 rows_written["parser_directors_kmp"] = _insert_directors_kmp(cur, resolved_cin, extracted.get("directors_kmp") or [])
+                # Stage 3 Group B child writes
+                if extracted.get("resolutions"):
+                    rows_written["parser_resolutions_agreements"] = _insert_resolutions(
+                        cur, resolved_cin, srn, extracted["resolutions"],
+                    )
+                if extracted.get("auditors"):
+                    auditor_rows, auditor_issues = _insert_or_update_auditors(
+                        cur, resolved_cin, srn, source_doc_type, extracted["auditors"],
+                    )
+                    rows_written["parser_auditors"] = auditor_rows
+                    extra_issues.extend(auditor_issues)
+                if extracted.get("deposits"):
+                    rows_written["parser_deposits"] = _insert_deposits(
+                        cur, resolved_cin, srn, extracted["deposits"],
+                    )
+                # DIR-3 KYC updates an existing director row by DIN — handled in
+                # the directors_kmp writer when the chunk carries KYC fields.
 
-            _log_inconsistencies(cur, resolved_cin, source_doc_type, source_doc_id, issues)
+            all_issues = list(issues) + extra_issues
+            _log_inconsistencies(cur, resolved_cin, source_doc_type, source_doc_id, all_issues)
             conn.commit()
 
             return PersistResult(
                 accepted=True,
                 cin=resolved_cin,
-                issues=issues,
+                issues=all_issues,
                 rows_written={k: v for k, v in rows_written.items() if v},
             )
 
@@ -398,21 +457,291 @@ def _insert_directors_kmp(cur, cin: str, directors: list[dict]) -> int:
         cessation = d.get("date_of_cessation")
         if isinstance(cessation, str):
             cessation = _coerce_date(cessation)
+        # Stage 3: DIR-3 KYC fields. Optional in the extractor payload.
+        dob = d.get("dob")
+        if isinstance(dob, str):
+            dob = _coerce_date(dob)
+        kyc_last_filed = d.get("kyc_last_filed_date")
+        if isinstance(kyc_last_filed, str):
+            kyc_last_filed = _coerce_date(kyc_last_filed)
+        kyc_due = d.get("kyc_due_date")
+        if isinstance(kyc_due, str):
+            kyc_due = _coerce_date(kyc_due)
         cur.execute(
             """
             INSERT INTO parser_directors_kmp
                 (cin, din_or_pan, din, pan, name, designation, category,
-                 date_of_appointment, date_of_cessation, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                 nationality, dob, gender, father_name,
+                 address_permanent, address_present, email, mobile,
+                 aadhaar_last4, passport_no,
+                 kyc_last_filed_date, kyc_due_date,
+                 date_of_appointment, date_of_cessation,
+                 updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s,
+                    %s, %s,
+                    %s, %s,
+                    NOW())
             ON CONFLICT (cin, din_or_pan) DO UPDATE SET
-                name                = COALESCE(EXCLUDED.name, parser_directors_kmp.name),
-                designation         = COALESCE(EXCLUDED.designation, parser_directors_kmp.designation),
+                name                = COALESCE(EXCLUDED.name,                parser_directors_kmp.name),
+                designation         = COALESCE(EXCLUDED.designation,         parser_directors_kmp.designation),
+                category            = COALESCE(EXCLUDED.category,            parser_directors_kmp.category),
+                nationality         = COALESCE(EXCLUDED.nationality,         parser_directors_kmp.nationality),
+                dob                 = COALESCE(EXCLUDED.dob,                 parser_directors_kmp.dob),
+                gender              = COALESCE(EXCLUDED.gender,              parser_directors_kmp.gender),
+                father_name         = COALESCE(EXCLUDED.father_name,         parser_directors_kmp.father_name),
+                address_permanent   = COALESCE(EXCLUDED.address_permanent,   parser_directors_kmp.address_permanent),
+                address_present     = COALESCE(EXCLUDED.address_present,     parser_directors_kmp.address_present),
+                email               = COALESCE(EXCLUDED.email,               parser_directors_kmp.email),
+                mobile              = COALESCE(EXCLUDED.mobile,              parser_directors_kmp.mobile),
+                aadhaar_last4       = COALESCE(EXCLUDED.aadhaar_last4,       parser_directors_kmp.aadhaar_last4),
+                passport_no         = COALESCE(EXCLUDED.passport_no,         parser_directors_kmp.passport_no),
+                kyc_last_filed_date = COALESCE(EXCLUDED.kyc_last_filed_date, parser_directors_kmp.kyc_last_filed_date),
+                kyc_due_date        = COALESCE(EXCLUDED.kyc_due_date,        parser_directors_kmp.kyc_due_date),
                 date_of_appointment = COALESCE(EXCLUDED.date_of_appointment, parser_directors_kmp.date_of_appointment),
-                date_of_cessation   = COALESCE(EXCLUDED.date_of_cessation, parser_directors_kmp.date_of_cessation),
+                date_of_cessation   = COALESCE(EXCLUDED.date_of_cessation,   parser_directors_kmp.date_of_cessation),
                 updated_at          = NOW()
             """,
             (cin, din_or_pan, din, pan, d.get("name"), d.get("designation"),
-             d.get("category"), appointment, cessation),
+             d.get("category"),
+             d.get("nationality"), dob, d.get("gender"), d.get("father_name"),
+             d.get("address_permanent"), d.get("address_present"),
+             d.get("email"), d.get("mobile"),
+             d.get("aadhaar_last4"), d.get("passport_no"),
+             kyc_last_filed, kyc_due,
+             appointment, cessation),
+        )
+        n += 1
+    return n
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 writers — parser_mca_filings, parser_resolutions_agreements,
+# parser_auditors (insert + update path), parser_deposits.
+# ---------------------------------------------------------------------------
+
+# parser_mca_filings columns the writer is allowed to touch.
+_MCA_FILING_COLUMNS = (
+    "srn", "cin", "form_type", "purpose", "filing_date", "event_date",
+    "fee_paid", "additional_fee", "payment_mode", "payment_status",
+    "processing_status", "dsc_signatory", "professional_certifier",
+    "attachment_list",
+)
+
+
+def _upsert_mca_filing(cur, cin: str, chunk: dict) -> int:
+    """Write parser_mca_filings row. SRN-first per S3-R1."""
+    if not chunk or not chunk.get("srn"):
+        return 0
+    values: dict[str, Any] = {"cin": cin}
+    for col in _MCA_FILING_COLUMNS:
+        if col == "cin":
+            continue
+        v = chunk.get(col)
+        if v in (None, "", []):
+            continue
+        if col in ("filing_date", "event_date") and isinstance(v, str):
+            v = _coerce_date(v)
+        if col == "attachment_list":
+            v = list(v) if v else []
+        values[col] = v
+    columns = list(values.keys())
+    placeholders = ", ".join(["%s"] * len(columns))
+    assigns = ", ".join([f"{c} = EXCLUDED.{c}" for c in columns if c != "srn"])
+    sql = f"""
+        INSERT INTO parser_mca_filings ({", ".join(columns)}, updated_at)
+        VALUES ({placeholders}, NOW())
+        ON CONFLICT (srn) DO UPDATE SET
+            {assigns},
+            updated_at = NOW()
+    """
+    cur.execute(sql, [values[c] for c in columns])
+    return 1
+
+
+def _insert_resolutions(cur, cin: str, mgt14_srn: Optional[str], rows: list[dict]) -> int:
+    if not mgt14_srn or not rows:
+        return 0
+    n = 0
+    for i, r in enumerate(rows, start=1):
+        seq = int(r.get("sequence") or i)
+        passed = r.get("date_passed")
+        if isinstance(passed, str):
+            passed = _coerce_date(passed)
+        mdate = r.get("meeting_date")
+        if isinstance(mdate, str):
+            mdate = _coerce_date(mdate)
+        cur.execute(
+            """
+            INSERT INTO parser_resolutions_agreements
+                (cin, mgt14_srn, sequence, resolution_type, section_under, purpose,
+                 date_passed, meeting_type, meeting_date, attachment_pointer)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (cin, mgt14_srn, sequence) DO UPDATE SET
+                resolution_type    = EXCLUDED.resolution_type,
+                section_under      = EXCLUDED.section_under,
+                purpose            = EXCLUDED.purpose,
+                date_passed        = EXCLUDED.date_passed,
+                meeting_type       = EXCLUDED.meeting_type,
+                meeting_date       = EXCLUDED.meeting_date,
+                attachment_pointer = EXCLUDED.attachment_pointer
+            """,
+            (cin, mgt14_srn, seq,
+             r.get("resolution_type"), r.get("section_under"), r.get("purpose"),
+             passed, r.get("meeting_type"), mdate, r.get("attachment_pointer")),
+        )
+        n += 1
+    return n
+
+
+def _insert_or_update_auditors(
+    cur, cin: str, srn: Optional[str], source_doc_type: str, auditors: list[dict],
+) -> tuple[int, list[ValidationIssue]]:
+    """
+    Insert / update parser_auditors rows. ADT-1 paths insert; ADT-3 paths
+    update an existing row by (cin, frn_or_membership_no) — if no matching
+    row exists, persist a stub anyway and emit a SOFT_WARN per Stage 3 brief
+    ("ADT-3 received before ADT-1 for this auditor/company").
+    """
+    issues: list[ValidationIssue] = []
+    written = 0
+    is_adt3 = source_doc_type == "ADT_3"
+
+    for a in auditors:
+        key = a.get("frn_or_membership_no") or a.get("firm_registration_no") or a.get("icai_membership_no")
+        if not key:
+            continue
+        period_from = a.get("period_from")
+        if isinstance(period_from, str):
+            period_from = _coerce_date(period_from)
+        if not period_from and is_adt3:
+            # Try to find the latest period_from row for this (cin, key) and reuse.
+            cur.execute(
+                "SELECT period_from FROM parser_auditors WHERE cin = %s AND frn_or_membership_no = %s "
+                "ORDER BY period_from DESC LIMIT 1",
+                (cin, key),
+            )
+            row = cur.fetchone()
+            if row:
+                period_from = row["period_from"]
+        if not period_from:
+            # Last-resort fallback for ADT-3 with no matching ADT-1: use the
+            # resignation_date as the period_from, stub the row, and warn.
+            if is_adt3:
+                resignation_date = a.get("resignation_date")
+                if isinstance(resignation_date, str):
+                    resignation_date = _coerce_date(resignation_date)
+                if resignation_date:
+                    period_from = resignation_date
+            if not period_from:
+                # Cannot satisfy composite PK — skip and warn.
+                issues.append(ValidationIssue(
+                    severity=Severity.SOFT_WARN,
+                    field="auditors.period_from",
+                    sources=[source_doc_type],
+                    message=f"Auditor {key} missing period_from — cannot persist",
+                    rule="auditor_period_from_missing",
+                ))
+                continue
+            issues.append(ValidationIssue(
+                severity=Severity.SOFT_WARN,
+                field="auditors",
+                sources=[source_doc_type],
+                message=(f"ADT-3 received before ADT-1 for {key} (cin={cin}); "
+                         "stubbing parser_auditors row from ADT-3 data."),
+                rule="adt3_before_adt1",
+            ))
+
+        period_to = a.get("period_to")
+        if isinstance(period_to, str):
+            period_to = _coerce_date(period_to)
+        date_of_appointment = a.get("date_of_appointment")
+        if isinstance(date_of_appointment, str):
+            date_of_appointment = _coerce_date(date_of_appointment)
+        agm_date = a.get("agm_date")
+        if isinstance(agm_date, str):
+            agm_date = _coerce_date(agm_date)
+        resignation_date = a.get("resignation_date")
+        if isinstance(resignation_date, str):
+            resignation_date = _coerce_date(resignation_date)
+
+        cur.execute(
+            """
+            INSERT INTO parser_auditors
+                (cin, frn_or_membership_no, period_from, category, name, pan,
+                 icai_membership_no, firm_registration_no, address, email,
+                 date_of_appointment, period_to, tenure_years, appointment_type,
+                 agm_date, adt1_srn, resignation_date, resignation_reason, adt3_srn,
+                 updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    NOW())
+            ON CONFLICT (cin, frn_or_membership_no, period_from) DO UPDATE SET
+                category              = COALESCE(EXCLUDED.category,              parser_auditors.category),
+                name                  = COALESCE(EXCLUDED.name,                  parser_auditors.name),
+                pan                   = COALESCE(EXCLUDED.pan,                   parser_auditors.pan),
+                icai_membership_no    = COALESCE(EXCLUDED.icai_membership_no,    parser_auditors.icai_membership_no),
+                firm_registration_no  = COALESCE(EXCLUDED.firm_registration_no,  parser_auditors.firm_registration_no),
+                address               = COALESCE(EXCLUDED.address,               parser_auditors.address),
+                email                 = COALESCE(EXCLUDED.email,                 parser_auditors.email),
+                date_of_appointment   = COALESCE(EXCLUDED.date_of_appointment,   parser_auditors.date_of_appointment),
+                period_to             = COALESCE(EXCLUDED.period_to,             parser_auditors.period_to),
+                tenure_years          = COALESCE(EXCLUDED.tenure_years,          parser_auditors.tenure_years),
+                appointment_type      = COALESCE(EXCLUDED.appointment_type,      parser_auditors.appointment_type),
+                agm_date              = COALESCE(EXCLUDED.agm_date,              parser_auditors.agm_date),
+                adt1_srn              = COALESCE(EXCLUDED.adt1_srn,              parser_auditors.adt1_srn),
+                resignation_date      = COALESCE(EXCLUDED.resignation_date,      parser_auditors.resignation_date),
+                resignation_reason    = COALESCE(EXCLUDED.resignation_reason,    parser_auditors.resignation_reason),
+                adt3_srn              = COALESCE(EXCLUDED.adt3_srn,              parser_auditors.adt3_srn),
+                updated_at            = NOW()
+            """,
+            (cin, key, period_from,
+             a.get("category"), a.get("name"), a.get("pan"),
+             a.get("icai_membership_no"), a.get("firm_registration_no"),
+             a.get("address"), a.get("email"),
+             date_of_appointment, period_to, a.get("tenure_years"), a.get("appointment_type"),
+             agm_date,
+             a.get("adt1_srn") or (srn if source_doc_type == "ADT_1" else None),
+             resignation_date, a.get("resignation_reason"),
+             a.get("adt3_srn") or (srn if source_doc_type == "ADT_3" else None)),
+        )
+        written += 1
+    return written, issues
+
+
+def _insert_deposits(cur, cin: str, dpt3_srn: Optional[str], rows: list[dict]) -> int:
+    if not rows:
+        return 0
+    n = 0
+    for r in rows:
+        fy = r.get("financial_year")
+        if not fy:
+            continue
+        cur.execute(
+            """
+            INSERT INTO parser_deposits
+                (cin, financial_year, purpose_of_filing,
+                 outstanding_secured, outstanding_unsecured, outstanding_non_deposit,
+                 net_worth, credit_rating, dpt3_srn, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (cin, financial_year) DO UPDATE SET
+                purpose_of_filing       = COALESCE(EXCLUDED.purpose_of_filing,       parser_deposits.purpose_of_filing),
+                outstanding_secured     = COALESCE(EXCLUDED.outstanding_secured,     parser_deposits.outstanding_secured),
+                outstanding_unsecured   = COALESCE(EXCLUDED.outstanding_unsecured,   parser_deposits.outstanding_unsecured),
+                outstanding_non_deposit = COALESCE(EXCLUDED.outstanding_non_deposit, parser_deposits.outstanding_non_deposit),
+                net_worth               = COALESCE(EXCLUDED.net_worth,               parser_deposits.net_worth),
+                credit_rating           = COALESCE(EXCLUDED.credit_rating,           parser_deposits.credit_rating),
+                dpt3_srn                = COALESCE(EXCLUDED.dpt3_srn,                parser_deposits.dpt3_srn),
+                updated_at              = NOW()
+            """,
+            (cin, fy, r.get("purpose_of_filing"),
+             r.get("outstanding_secured"), r.get("outstanding_unsecured"),
+             r.get("outstanding_non_deposit"), r.get("net_worth"),
+             r.get("credit_rating"), r.get("dpt3_srn") or dpt3_srn),
         )
         n += 1
     return n

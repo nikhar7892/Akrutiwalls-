@@ -180,3 +180,103 @@ Stage 3 only needs to:
   and a test to `tests/test_validation.py`.
 - **Add a new doc type:** update the report's per-document section FIRST,
   then add a classifier rule + extractor module + test.
+
+## Stage 3 — Group B (MCA Filing Form) Extractors
+
+### Group B extractors — module → target tables
+
+All seven Group B docs are MCA V3 web-form PDFs; the V2-emblem fallback
+hook stays a `TODO: confirm with sample` per the Stage 2/3 briefs.
+
+| Doc | Module | Target tables |
+|---|---|---|
+| DIR-12       | `parser/extractors/dir_12.py`      | `parser_mca_filings`, `parser_directors_kmp` |
+| MGT-14       | `parser/extractors/mgt_14.py`      | `parser_mca_filings`, `parser_resolutions_agreements` |
+| ADT-1        | `parser/extractors/adt_1.py`       | `parser_mca_filings`, `parser_auditors` |
+| ADT-3        | `parser/extractors/adt_3.py`       | `parser_mca_filings`, `parser_auditors` (update by FRN/Membership) |
+| DIR-3 KYC    | `parser/extractors/dir_3_kyc.py`   | `parser_mca_filings`, `parser_directors_kmp` (update by DIN) |
+| SRN Challan  | `parser/extractors/srn_challan.py` | `parser_mca_filings` only |
+| DPT-3        | `parser/extractors/dpt_3.py`       | `parser_mca_filings`, `parser_deposits` |
+
+Each extractor exports `extract(pdf_path) -> dict` with the same chunked
+payload as Stage 2, plus an `mca_filing` chunk (singular) keyed by SRN.
+
+### SRN-first persistence contract (S3-R1)
+
+For any Group B doc the persistence layer:
+
+1. **Validates SRN format** (`^[A-Z][0-9]{8}$`) before any other write.
+   Missing/malformed SRN → HARD_FAIL inconsistency, abort. No placeholder
+   SRN is ever invented.
+2. **Upserts `parser_mca_filings` FIRST.** This is the foreign-key target
+   every Group B child row references; the order is invariant.
+3. **Then** writes child rows in the right table:
+   `parser_resolutions_agreements` (MGT-14), `parser_auditors` (ADT-1
+   inserts, ADT-3 updates by `(cin, frn_or_membership_no)`), `parser_deposits`
+   (DPT-3), `parser_directors_kmp` (DIR-12 upserts; DIR-3 KYC updates by
+   `(cin, din_or_pan)` with KYC fields COALESCE'd onto existing rows).
+4. **ADT-3 before ADT-1 edge case** (auditor row not yet present):
+   persist a stub `parser_auditors` row using ADT-3's `frn_or_membership_no`
+   and `resignation_date` as `period_from`, emit a SOFT_WARN
+   (`adt3_before_adt1`). NOT a HARD_FAIL.
+5. **DIR-3 KYC before DIR-12**: create a stub director row with KYC
+   fields; the eventual DIR-12 fills in `date_of_appointment` /
+   `designation` via the COALESCE upsert.
+
+### DIR-3 KYC triennial due-date logic (S3-R2)
+
+Legal basis: Companies (Appointment and Qualification of Directors)
+Amendment Rules, 2025 notified vide **G.S.R. 943(E) dated 31 December 2025**,
+effective **31 March 2026**. Per PIB Press Release **PRID=2210552**
+quoted in report §13.A: directors who have filed KYC at least once
+before 31 March 2026 have their next KYC due **30 June 2028**; thereafter
+the cycle is triennial.
+
+Implementation in `parser/extractors/dir_3_kyc.py:compute_kyc_due_date`:
+
+- `kyc_last_filed_date < 2026-03-31` → `kyc_due_date = 2028-06-30` (transitional rule).
+- `kyc_last_filed_date >= 2026-03-31` → `kyc_due_date = kyc_last_filed_date + 3 years`
+  exact-date (with Feb-29 → Feb-28 fallback). The within-cycle exact-date
+  convention is left as `TODO: confirm with sample` per S3-R2 — the
+  report doesn't make the rule explicit.
+
+Both branches are unit-tested.
+
+### Controlled vocabularies (S3-R3)
+
+Encoded verbatim from the report in `parser/vocab.py`. Off-vocab values
+are NEVER silently normalised — `match_enum()` does case-insensitive
+**equality** only (no prefix / fuzzy / closest-match fallback). When a
+parsed value is off-vocab, the extractor logs a SOFT_WARN and stashes
+the raw string in `metadata.<field>_raw`; the canonical-enum slot is
+left as `None`.
+
+| Vocabulary | Report § | Values |
+|---|---|---|
+| `DIR12_PURPOSE_OF_FILING`        | §9.B  | 6 values (Appointment / Cessation / …) |
+| `DIR12_DESIGNATION`              | §9.D  | 9 values (Director / Managing Director / …) |
+| `DIR12_CATEGORY`                 | §9.B  | 8 values (Promoter / Independent / …) |
+| `DIR12_REASON_FOR_CESSATION`     | §9.B  | 5 values (Resignation / Removal / …) |
+| `MGT14_RESOLUTION_TYPE`          | §10.B | 6 values (Special / Board / Ordinary / Postal Ballot / Winding-up under IBC s.59 / Resolution of liquidator) |
+| `MGT14_PURPOSE`                  | §10.B | 10 values (Alteration in object clause / Alteration in name / …); report includes "etc.", so an off-vocab value is a SOFT_WARN, not a HARD_FAIL |
+| `ADT1_NATURE_OF_APPOINTMENT`     | §11.B field 3(b) | 10 values (First auditor by Board / Appointment in AGM / …) |
+| `ADT1_AUDITOR_CATEGORY`          | §11.B I(a) | 2 values (Individual / Firm) |
+| `DIR3KYC_PURPOSE_OF_FILING`      | §13.B | 6 values (KYC compliances / Reactivation of DIN / …) |
+| `DPT3_PURPOSE_OF_FILING`         | §15.B field 3  | 4 values (One-time return / Annual Return of deposits / …) |
+| `DPT3_RULE_2_1_C_SUBCLAUSES`     | §15.B field 12 | 13 sub-clauses (i)–(xiii), iteration-order preserved |
+
+### How Stage 3 extends, not replaces
+
+Stage 3 added:
+- `parser/extractors/{dir_12,mgt_14,adt_1,adt_3,dir_3_kyc,srn_challan,dpt_3}.py`
+- `parser/vocab.py` — controlled vocabularies
+- New writer paths in `parser/persistence.py` (SRN-first contract,
+  `_upsert_mca_filing`, `_insert_resolutions`, `_insert_or_update_auditors`,
+  `_insert_deposits`) and an extended `_insert_directors_kmp` that COALESCEs
+  Stage 1 director-master columns + KYC fields.
+- Tests: `test_extractor_{dir_12,mgt_14,adt_1,adt_3,dir_3_kyc,srn_challan,dpt_3}.py`
+  and `test_stage3_e2e.py`.
+
+Stage 1 schema, Stage 1 validators, the classifier core, and every Stage 2
+extractor / test remain **untouched**. The Stage 2 E2E continues to pass
+unchanged. No new tables, no new identifier regexes, no new severity levels.

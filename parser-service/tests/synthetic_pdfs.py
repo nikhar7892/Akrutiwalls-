@@ -337,85 +337,257 @@ def write_mca_master_data(path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Group B placeholders — needed only for classifier tests.
+# Group B — realistic test PDFs for Stage 3 extractor + persistence smoke.
+# Distinct SRNs per doc (all matching ^[A-Z][0-9]{8}$).
 # ---------------------------------------------------------------------------
 
+SAMPLE_SRN_DIR_12     = "T11000001"
+SAMPLE_SRN_MGT_14     = "T22000002"
+SAMPLE_SRN_ADT_1      = "T33000003"
+SAMPLE_SRN_ADT_3      = "T44000004"
+SAMPLE_SRN_DIR_3_KYC  = "T55000005"
+SAMPLE_SRN_CHALLAN    = "T66000006"
+SAMPLE_SRN_DPT_3      = "T77000007"
+
+SAMPLE_FRN = "012345W"          # FRN ^[0-9]{6}[A-Z]$ per §11.D (TODO sample carried).
+SAMPLE_AUDITOR_PAN = "AAACA1234B"  # 4th char 'A' (Firm-of-CAs is allowed; report keeps PAN structure agnostic).
+
+
 def write_dir_12(path: Path) -> Path:
+    """DIR-12 with two repeating director blocks per §9.B/§9.C."""
     c = _new_canvas(path)
     _draw_lines(c, [
         "Ministry of Corporate Affairs",
         "Form No. DIR-12",
         "Particulars of appointment of directors and the key managerial personnel",
         f"CIN: {SAMPLE_CIN}",
+        f"Company Name: {SAMPLE_LEGAL_NAME}",
+        f"SRN: {SAMPLE_SRN_DIR_12}",
+        "Purpose of filing: Appointment",
+        "Number of persons: 2",
+        "",
+        "Particulars of Director [1]",
+        f"DIN: {SAMPLE_DIN_1}",
+        "Name: JOHN SMITH",
+        "Designation: Director",
+        "Category: Promoter",
+        "DOB: 01/01/1980",
+        "Date of appointment: 05/04/2018",
+        "",
+        "Particulars of Director [2]",
+        f"DIN: {SAMPLE_DIN_2}",
+        "Name: JANE DOE",
+        "Designation: Managing Director",
+        "Category: Promoter",
+        "DOB: 01/06/1982",
+        "Date of appointment: 05/04/2018",
+        "",
+        "Date of filing: 15/04/2018",
+        "Total fee: Rs. 600.00",
     ])
     c.save()
     return path
 
 
 def write_mgt_14(path: Path) -> Path:
+    """MGT-14 with two repeating resolution blocks per §10.B/§10.C."""
     c = _new_canvas(path)
     _draw_lines(c, [
         "Ministry of Corporate Affairs",
         "Form No. MGT-14",
         f"CIN: {SAMPLE_CIN}",
+        f"Company Name: {SAMPLE_LEGAL_NAME}",
+        f"SRN: {SAMPLE_SRN_MGT_14}",
+        "Purpose: Resolution",
+        "Number of resolutions: 2",
+        "",
+        "Resolution [1]",
+        "Type: Special",
+        "Purpose: Alteration in Articles",
+        "Section 14",
+        "Date of resolution: 30/09/2023",
+        "Place of meeting: Mumbai",
+        "",
+        "Resolution [2]",
+        "Type: Board",
+        "Purpose: Borrowing limits",
+        "Section 180(1)(c)",
+        "Date of resolution: 30/09/2023",
+        "Place of meeting: Mumbai",
+        "",
+        "Date of filing: 25/10/2023",
+        "Total fee: Rs. 600.00",
     ])
     c.save()
     return path
 
 
 def write_adt_1(path: Path) -> Path:
+    """ADT-1 with two joint-auditor blocks per §11.B."""
     c = _new_canvas(path)
     _draw_lines(c, [
         "Ministry of Corporate Affairs",
         "Form ADT-1",
         f"CIN: {SAMPLE_CIN}",
+        f"Company Name: {SAMPLE_LEGAL_NAME}",
+        f"SRN: {SAMPLE_SRN_ADT_1}",
+        "Whether Audit Committee recommendation u/s 177 considered: Yes",
+        "Nature of appointment: Appointment in AGM",
+        "Joint auditors: Yes",
+        "Whether appointed in AGM: Yes",
+        "Date of AGM: 30/09/2023",
+        "Date of appointment: 30/09/2023",
+        "",
+        "Auditor [1]",
+        "Category: Firm",
+        f"PAN: {SAMPLE_AUDITOR_PAN}",
+        "Name: ACME & Co. LLP",
+        f"Firm Registration Number: {SAMPLE_FRN}",
+        "Membership No: 123456",
+        "Address: 1 MG Road, Mumbai",
+        "Email: acme@example.in",
+        "Period of account from: 01/04/2023",
+        "Period of account to: 31/03/2028",
+        "Number of financial years: 5",
+        "",
+        "Auditor [2]",
+        "Category: Individual",
+        "PAN: AAAPB1234C",
+        "Name: Rakesh Mehta",
+        "Membership No: 098765",
+        "Address: 4 BKC, Mumbai",
+        "Email: rakesh@example.in",
+        "Period of account from: 01/04/2023",
+        "Period of account to: 31/03/2024",
+        "Number of financial years: 1",
+        "",
+        "Date of filing: 14/10/2023",
+        "Total fee: Rs. 600.00",
     ])
     c.save()
     return path
 
 
 def write_adt_3(path: Path) -> Path:
+    """ADT-3 — auditor resignation, links via SRN of original ADT-1 per §12.B field 11."""
     c = _new_canvas(path)
     _draw_lines(c, [
         "Ministry of Corporate Affairs",
         "Form No. ADT-3",
         f"CIN: {SAMPLE_CIN}",
+        f"Company Name: {SAMPLE_LEGAL_NAME}",
+        f"SRN: {SAMPLE_SRN_ADT_3}",
+        "Category of auditor: Firm",
+        f"PAN: {SAMPLE_AUDITOR_PAN}",
+        "Name of auditor: ACME & Co. LLP",
+        f"Firm Registration Number: {SAMPLE_FRN}",
+        "Membership Number: 123456",
+        "Address of auditor: 1 MG Road, Mumbai",
+        "Email: acme@example.in",
+        "Date of appointment: 30/09/2023",
+        "Date of resignation: 15/03/2024",
+        f"SRN of original ADT-1: {SAMPLE_SRN_ADT_1}",
+        "Reasons for resignation: Auditor pre-occupied with other engagements.",
     ])
     c.save()
     return path
 
 
-def write_dir_3_kyc(path: Path) -> Path:
+def write_dir_3_kyc(path: Path, *, din: str = SAMPLE_DIN_1,
+                    filed_on: str = "30/06/2024") -> Path:
+    """DIR-3 KYC. Filing date before 2026-03-31 → next due 2028-06-30 (S3-R2)."""
     c = _new_canvas(path)
     _draw_lines(c, [
         "Ministry of Corporate Affairs",
         "Form DIR-3 KYC",
+        f"CIN: {SAMPLE_CIN}",
+        f"SRN: {SAMPLE_SRN_DIR_3_KYC}",
+        f"DIN: {din}",
         "Purpose of filing: KYC compliances",
+        "Name: JOHN SMITH",
+        "Father's name: James Smith",
+        "Nationality: Indian",
+        "Whether citizen of India: Yes",
+        "Whether resident in India: Yes",
+        "DOB: 01/01/1980",
+        "Gender: Male",
+        f"PAN: {SAMPLE_PAN}",
+        "Whether has Aadhaar: Yes",
+        "Aadhaar Number: XXXXXXXX1234",
+        "Mobile: 9876543210",
+        "Email: john@example.in",
+        "Permanent residential address: 12 MG Road, Bengaluru 560001",
+        "Whether present residence same as permanent: Yes",
+        f"Date of filing: {filed_on}",
     ])
     c.save()
     return path
 
 
 def write_srn_challan(path: Path) -> Path:
+    """SRN Challan / payment receipt per §14.B."""
     c = _new_canvas(path)
     _draw_lines(c, [
+        f"SRN: {SAMPLE_SRN_CHALLAN}",
         "Ministry of Corporate Affairs — Government of India",
         "Service Request Receipt",
         "Service Description: Form DIR-12",
-        "SRN: T87654321",
         f"CIN: {SAMPLE_CIN}",
-        "Amount Paid: Rs. 600.00",
+        f"Company Name: {SAMPLE_LEGAL_NAME}",
+        "User Name: Akruti Partners LLP",
+        "Date of Generation: 15/04/2018",
+        "Filing fee: Rs. 600.00",
+        "Stamp duty: Rs. 0.00",
+        "Additional fee: Rs. 0.00",
+        "Total: Rs. 600.00",
+        "Mode of payment: Net Banking",
+        "Payment status: Paid",
+        "Transaction ID: TX1234567890",
+        "Bank Name: HDFC Bank",
     ])
     c.save()
     return path
 
 
-def write_dpt_3(path: Path) -> Path:
+def write_dpt_3(path: Path, *, fy: str = "2023-24") -> Path:
+    """DPT-3 with Rule 2(1)(c) sub-clause iteration per §15.B field 12."""
     c = _new_canvas(path)
     _draw_lines(c, [
         "Ministry of Corporate Affairs",
         "Form No. DPT-3",
         f"CIN: {SAMPLE_CIN}",
+        f"Company Name: {SAMPLE_LEGAL_NAME}",
+        f"SRN: {SAMPLE_SRN_DPT_3}",
+        "Type of company: Private",
+        "Purpose of filing: Annual Return of deposits",
+        "Objects of company: Computer programming and IT consultancy.",
+        f"Period for which return is filed: {fy}",
+        "Date of last closing of accounts: 31/03/2024",
+        "Net Worth: 5000000",
+        "Credit rating agency: CRISIL",
+        "Credit rating: AA-",
+        "Total number of deposit holders: 0",
+        "Outstanding Secured: 0",
+        "Outstanding Unsecured: 1000000",
+        "Outstanding non-deposit: 1500000",
+        "",
+        "Particulars of receipts not considered as deposits under Rule 2(1)(c):",
+        "(i) CG/SG/Local/Statutory Authority: 0",
+        "(ii) foreign banks/govt: 0",
+        "(iii) banking company: 500000",
+        "(iv) loan from bank/FI/insurance: 500000",
+        "(v) loan from director/relative (Private Co.): 1000000",
+        "(vi) commercial paper: 0",
+        "(vii) ICDs: 0",
+        "(viii) startup convertible note ≥ ₹25L single tranche: 0",
+        "(ix) subscription pending allotment ≤ 60 days: 0",
+        "(x) security deposit from employee ≤ annual salary: 0",
+        "(xi) customer advance: 0",
+        "(xii) ECB: 0",
+        "(xiii) others: 0",
+        "",
+        "Date of filing: 30/06/2024",
+        "Total fee: Rs. 600.00",
     ])
     c.save()
     return path
