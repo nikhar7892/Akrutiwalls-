@@ -466,6 +466,243 @@ model Filing {
 
 // ---------- Audit log ----------
 
+// ===========================================================================
+// Stage 1 — Parser-Spec Normalised Schema
+// ---------------------------------------------------------------------------
+// Source of truth: project report 'Parser Specification — Indian Company &
+// Statutory Documents' (research date 14 May 2026), section 'Consolidated
+// Master Schema'. Every column name and PK below is taken verbatim from the
+// report. Physical table names use a 'parser_' prefix (set via @@map) to
+// avoid collision with the existing application tables; the report's logical
+// names (`company`, `directors_kmp`, `auditors`, ...) are preserved in the
+// trailing segment of each @@map and in this schema's structure.
+//
+// Identifier formats are validated by Postgres CHECK constraints added in
+// the migration SQL — see prisma/migrations/.../migration.sql for the
+// regex strings (also kept verbatim from the report's identifier table).
+// ===========================================================================
+
+model ParserCompany {
+  // PK = cin (per report). PAN cross-validated separately (hard-fail rule).
+  cin                              String   @id
+  pan                              String?
+  tan                              String?
+  legal_name                       String   @map("legal_name")
+  former_names                     String[] @default([]) @map("former_names")
+  date_of_incorporation            DateTime? @map("date_of_incorporation") @db.Date
+  roc_jurisdiction                 String?  @map("roc_jurisdiction")
+  company_category                 String?  @map("company_category")
+  company_sub_category             String?  @map("company_sub_category")
+  listing_status                   String?  @map("listing_status")
+  company_status                   String?  @map("company_status")
+  registered_office_address        String?  @map("registered_office_address")
+  registered_office_email          String?  @map("registered_office_email")
+  authorised_capital               Decimal? @db.Decimal(20, 2) @map("authorised_capital")
+  paid_up_capital                  Decimal? @db.Decimal(20, 2) @map("paid_up_capital")
+  nic_industry_code                String?  @map("nic_industry_code")
+  industrial_activity_description  String?  @map("industrial_activity_description")
+  last_agm_date                    DateTime? @map("last_agm_date") @db.Date
+  last_balance_sheet_date          DateTime? @map("last_balance_sheet_date") @db.Date
+  cin_history                      String[] @default([]) @map("cin_history")
+
+  created_at                       DateTime @default(now()) @map("created_at")
+  updated_at                       DateTime @updatedAt @map("updated_at")
+
+  directors_kmp     ParserDirectorKmp[]
+  auditors          ParserAuditor[]
+  resolutions       ParserResolutionAgreement[]
+  deposits          ParserDeposit[]
+  registrations     ParserRegistration[]
+  mca_filings       ParserMcaFiling[]
+
+  @@map("parser_company")
+}
+
+model ParserDirectorKmp {
+  // PK = (cin, din_or_pan) — composite per report. `din_or_pan` is whichever
+  // identifier the source provides (DIN for directors, PAN for non-DIN KMP).
+  cin                  String
+  din_or_pan           String   @map("din_or_pan")
+  din                  String?
+  pan                  String?
+  name                 String?
+  designation          String?
+  category             String?
+  date_of_appointment  DateTime? @map("date_of_appointment") @db.Date
+  date_of_cessation    DateTime? @map("date_of_cessation") @db.Date
+  nationality          String?
+  dob                  DateTime? @db.Date
+  gender               String?
+  father_name          String?  @map("father_name")
+  address_permanent    String?  @map("address_permanent")
+  address_present      String?  @map("address_present")
+  email                String?
+  mobile               String?
+  aadhaar_last4        String?  @map("aadhaar_last4")
+  passport_no          String?  @map("passport_no")
+  kyc_last_filed_date  DateTime? @map("kyc_last_filed_date") @db.Date
+  kyc_due_date         DateTime? @map("kyc_due_date") @db.Date
+
+  created_at           DateTime @default(now()) @map("created_at")
+  updated_at           DateTime @updatedAt @map("updated_at")
+
+  company              ParserCompany @relation(fields: [cin], references: [cin], onDelete: Cascade)
+
+  @@id([cin, din_or_pan])
+  @@index([din])
+  @@index([pan])
+  @@map("parser_directors_kmp")
+}
+
+model ParserAuditor {
+  // PK = (cin, frn_or_membership_no, period_from) per report. `frn_or_membership_no`
+  // holds whichever ICAI key the appointment used.
+  cin                       String
+  frn_or_membership_no      String   @map("frn_or_membership_no")
+  period_from               DateTime @map("period_from") @db.Date
+  category                  String?  // 'Individual' | 'Firm'
+  name                      String?
+  pan                       String?
+  icai_membership_no        String?  @map("icai_membership_no")
+  firm_registration_no      String?  @map("firm_registration_no")
+  address                   String?
+  email                     String?
+  date_of_appointment       DateTime? @map("date_of_appointment") @db.Date
+  period_to                 DateTime? @map("period_to") @db.Date
+  tenure_years              Int?     @map("tenure_years")
+  appointment_type          String?  @map("appointment_type")
+  agm_date                  DateTime? @map("agm_date") @db.Date
+  adt1_srn                  String?  @map("adt1_srn")
+  resignation_date          DateTime? @map("resignation_date") @db.Date
+  resignation_reason        String?  @map("resignation_reason")
+  adt3_srn                  String?  @map("adt3_srn")
+
+  created_at                DateTime @default(now()) @map("created_at")
+  updated_at                DateTime @updatedAt @map("updated_at")
+
+  company                   ParserCompany   @relation(fields: [cin], references: [cin], onDelete: Cascade)
+  adt1_filing               ParserMcaFiling? @relation("AuditorAdt1", fields: [adt1_srn], references: [srn])
+  adt3_filing               ParserMcaFiling? @relation("AuditorAdt3", fields: [adt3_srn], references: [srn])
+
+  @@id([cin, frn_or_membership_no, period_from])
+  @@index([adt1_srn])
+  @@index([adt3_srn])
+  @@map("parser_auditors")
+}
+
+model ParserResolutionAgreement {
+  // PK = (cin, mgt14_srn, sequence) per report. `sequence` is the per-resolution
+  // index within a single MGT-14 filing.
+  cin                String
+  mgt14_srn          String   @map("mgt14_srn")
+  sequence           Int
+  resolution_type    String?  @map("resolution_type")
+  section_under      String?  @map("section_under")
+  purpose            String?
+  date_passed        DateTime? @map("date_passed") @db.Date
+  meeting_type       String?  @map("meeting_type")
+  meeting_date       DateTime? @map("meeting_date") @db.Date
+  attachment_pointer String?  @map("attachment_pointer")
+
+  created_at         DateTime @default(now()) @map("created_at")
+
+  company            ParserCompany   @relation(fields: [cin], references: [cin], onDelete: Cascade)
+  filing             ParserMcaFiling @relation(fields: [mgt14_srn], references: [srn])
+
+  @@id([cin, mgt14_srn, sequence])
+  @@index([mgt14_srn])
+  @@map("parser_resolutions_agreements")
+}
+
+model ParserDeposit {
+  // PK = (cin, financial_year) per report.
+  cin                       String
+  financial_year            String   @map("financial_year")
+  purpose_of_filing         String?  @map("purpose_of_filing")
+  outstanding_secured       Decimal? @db.Decimal(20, 2) @map("outstanding_secured")
+  outstanding_unsecured     Decimal? @db.Decimal(20, 2) @map("outstanding_unsecured")
+  outstanding_non_deposit   Decimal? @db.Decimal(20, 2) @map("outstanding_non_deposit")
+  net_worth                 Decimal? @db.Decimal(20, 2) @map("net_worth")
+  credit_rating             String?  @map("credit_rating")
+  dpt3_srn                  String?  @map("dpt3_srn")
+
+  created_at                DateTime @default(now()) @map("created_at")
+  updated_at                DateTime @updatedAt @map("updated_at")
+
+  company                   ParserCompany   @relation(fields: [cin], references: [cin], onDelete: Cascade)
+  filing                    ParserMcaFiling? @relation(fields: [dpt3_srn], references: [srn])
+
+  @@id([cin, financial_year])
+  @@index([dpt3_srn])
+  @@map("parser_deposits")
+}
+
+model ParserRegistration {
+  // PK = (cin, type, identifier) per report. One row per GSTIN per State,
+  // one row for Udyam, one row for IEC, etc.
+  cin                            String
+  type                           String   // 'GST' | 'UDYAM' | 'IEC' | ...
+  identifier                     String
+
+  // GST sub-block
+  gstin                          String?
+  gst_legal_name                 String?  @map("gst_legal_name")
+  gst_trade_name                 String?  @map("gst_trade_name")
+  constitution_of_business       String?  @map("constitution_of_business")
+  principal_place_of_business    String?  @map("principal_place_of_business")
+  additional_places_of_business  String[] @default([]) @map("additional_places_of_business")
+  date_of_liability              DateTime? @map("date_of_liability") @db.Date
+  period_of_validity_from        DateTime? @map("period_of_validity_from") @db.Date
+  period_of_validity_to          DateTime? @map("period_of_validity_to") @db.Date
+  type_of_registration           String?  @map("type_of_registration")
+
+  // Udyam sub-block
+  udyam_registration_number      String?  @map("udyam_registration_number")
+  udyam_enterprise_type          String?  @map("udyam_enterprise_type")
+  udyam_date_of_registration     DateTime? @map("udyam_date_of_registration") @db.Date
+  udyam_date_of_commencement     DateTime? @map("udyam_date_of_commencement") @db.Date
+  nic_codes                      String[] @default([]) @map("nic_codes")
+
+  created_at                     DateTime @default(now()) @map("created_at")
+  updated_at                     DateTime @updatedAt @map("updated_at")
+
+  company                        ParserCompany @relation(fields: [cin], references: [cin], onDelete: Cascade)
+
+  @@id([cin, type, identifier])
+  @@map("parser_registrations")
+}
+
+model ParserMcaFiling {
+  // PK = srn per report. SRN is the universal FK across MCA tables.
+  srn                    String   @id
+  cin                    String
+  form_type              String   @map("form_type")
+  purpose                String?
+  filing_date            DateTime? @map("filing_date") @db.Date
+  event_date             DateTime? @map("event_date") @db.Date
+  fee_paid               Decimal? @db.Decimal(20, 2) @map("fee_paid")
+  additional_fee         Decimal? @db.Decimal(20, 2) @map("additional_fee")
+  payment_mode           String?  @map("payment_mode")
+  payment_status         String?  @map("payment_status")
+  processing_status      String?  @map("processing_status")
+  dsc_signatory          String?  @map("dsc_signatory")
+  professional_certifier String?  @map("professional_certifier")
+  attachment_list        String[] @default([]) @map("attachment_list")
+
+  created_at             DateTime @default(now()) @map("created_at")
+  updated_at             DateTime @updatedAt @map("updated_at")
+
+  company                ParserCompany @relation(fields: [cin], references: [cin], onDelete: Cascade)
+  resolutions            ParserResolutionAgreement[]
+  deposits               ParserDeposit[]
+  auditor_adt1_links     ParserAuditor[]              @relation("AuditorAdt1")
+  auditor_adt3_links     ParserAuditor[]              @relation("AuditorAdt3")
+
+  @@index([cin])
+  @@index([form_type])
+  @@map("parser_mca_filings")
+}
+
 model AuditLog {
   id          String   @id @default(cuid())
   companyId   String?
