@@ -514,6 +514,8 @@ model ParserCompany {
   deposits          ParserDeposit[]
   registrations     ParserRegistration[]
   mca_filings       ParserMcaFiling[]
+  moa_clauses       ParserMoaClause[]
+  aoa_clauses       ParserAoaClause[]
 
   @@map("parser_company")
 }
@@ -701,6 +703,70 @@ model ParserMcaFiling {
   @@index([cin])
   @@index([form_type])
   @@map("parser_mca_filings")
+}
+
+// ===========================================================================
+// Stage 2 — Group A clause-tree storage + inconsistencies log
+// ---------------------------------------------------------------------------
+// New tables introduced in Stage 2 to back the AoA/MoA clause-tree extractors
+// and the cross-document validation outcome log. Field names follow the user's
+// Stage 2 brief verbatim. Stage 1 schema is untouched.
+// ===========================================================================
+
+model ParserMoaClause {
+  // Per the Stage 2 brief: columns cin, clause_roman, clause_title, clause_text,
+  // sub_clauses JSONB. PK = (cin, clause_roman).
+  cin           String
+  clause_roman  String   @map("clause_roman")
+  clause_title  String   @map("clause_title")
+  clause_text   String   @map("clause_text")
+  sub_clauses   Json?    @map("sub_clauses")
+
+  created_at    DateTime @default(now()) @map("created_at")
+  updated_at    DateTime @updatedAt       @map("updated_at")
+
+  company       ParserCompany @relation(fields: [cin], references: [cin], onDelete: Cascade)
+
+  @@id([cin, clause_roman])
+  @@map("parser_moa_clauses")
+}
+
+model ParserAoaClause {
+  // Per the Stage 2 brief: clause-tree keyed (cin, article_no, article_title, clause_no).
+  // Sub-clauses NOT atomised — clause_text holds raw text.
+  cin           String
+  article_no    String   @map("article_no")
+  article_title String   @map("article_title")
+  clause_no     String   @map("clause_no")
+  clause_text   String   @map("clause_text")
+
+  created_at    DateTime @default(now()) @map("created_at")
+  updated_at    DateTime @updatedAt       @map("updated_at")
+
+  company       ParserCompany @relation(fields: [cin], references: [cin], onDelete: Cascade)
+
+  @@id([cin, article_no, article_title, clause_no])
+  @@map("parser_aoa_clauses")
+}
+
+model ParserInconsistency {
+  // Cross-document validator outcome log. Columns per Stage 2 brief verbatim:
+  // id, cin, severity, rule, source_doc_type, source_doc_id, field, expected,
+  // found, created_at.
+  id              String   @id @default(cuid())
+  cin             String?
+  severity        String
+  rule            String
+  source_doc_type String   @map("source_doc_type")
+  source_doc_id   String?  @map("source_doc_id")
+  field           String?
+  expected        String?
+  found           String?
+  created_at      DateTime @default(now()) @map("created_at")
+
+  @@index([cin])
+  @@index([severity])
+  @@map("parser_inconsistencies")
 }
 
 model AuditLog {
